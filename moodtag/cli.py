@@ -18,7 +18,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 from typing import Any, Iterator
@@ -108,6 +108,8 @@ class EagleItem:
     annotation: str
     width: int | None = None
     height: int | None = None
+    size: int | None = None
+    palettes: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -413,6 +415,12 @@ def parse_item(raw: dict[str, Any]) -> EagleItem:
         annotation=str(raw.get("annotation", "") or ""),
         width=raw.get("width"),
         height=raw.get("height"),
+        size=raw.get("size"),
+        palettes=[
+            palette
+            for palette in (raw.get("palettes") or [])
+            if isinstance(palette, dict)
+        ],
     )
 
 
@@ -530,7 +538,10 @@ def flatten_taxonomy(taxonomy: dict[str, list[str]]) -> dict[str, str]:
 
 
 def locate_original_from_thumbnail(thumbnail: Path, item: EagleItem) -> Path:
-    info_dir = thumbnail.parent
+    return locate_original_in_info_dir(thumbnail.parent, item)
+
+
+def locate_original_in_info_dir(info_dir: Path, item: EagleItem) -> Path:
     if not info_dir.exists() or not info_dir.is_dir():
         raise MoodtagError(f"Item directory not found for {item.id}: {info_dir}")
 
@@ -817,16 +828,10 @@ def build_context_markdown(
     items: list[EagleItem],
     *,
     include_pending: bool = False,
+    source_paths: dict[str, Path] | None = None,
 ) -> str:
-    rows: list[tuple[EagleItem, dict[str, str], bool]] = []
-    skipped_pending = 0
-    for item in items:
-        fields = parse_annotation_fields(item.annotation)
-        complete = all(fields.get(label) for label in ANNOTATION_LABEL_ORDER)
-        if not complete and not include_pending:
-            skipped_pending += 1
-            continue
-        rows.append((item, fields, complete))
+    rows, skipped_pending = context_rows(items, include_pending=include_pending)
+    source_paths = source_paths or {}
 
     lines = [
         f"# Moodboard Context: {board.path}",
@@ -837,13 +842,26 @@ def build_context_markdown(
         "",
     ]
 
-    for index, (item, fields, complete) in enumerate(rows, start=1):
-        lines.append(f"## {index}. {one_line(item.name)}")
-        lines.append(f"ID: {item.id}")
+    label_width = max(2, len(str(max(0, len(rows) - 1))))
+    for index, (item, fields, complete) in enumerate(rows):
+        lines.append(f"## {index:0{label_width}d}")
+        lines.append(
+            format_context_metadata(
+                item,
+                fields,
+                source_path=source_paths.get(item.id),
+            )
+        )
         if not complete:
             lines.append("Status: pending")
-        lines.append("Tags: " + (", ".join(one_line(tag) for tag in item.tags) or "-"))
+        lines.append("Tags: " + format_tags(item.tags))
+        palette = format_palettes(item.palettes)
+        if palette:
+            lines.append("Palette: " + palette)
+        lines.append("")
         for label in ANNOTATION_LABEL_ORDER:
+            if label == "Brief":
+                continue
             value = one_line(fields.get(label, ""))
             if value or include_pending:
                 lines.append(f"{label}: {value or '-'}")
@@ -852,18 +870,156 @@ def build_context_markdown(
     return "\n".join(lines).rstrip() + "\n"
 
 
+def context_rows(
+    items: list[EagleItem],
+    *,
+    include_pending: bool = False,
+) -> tuple[list[tuple[EagleItem, dict[str, str], bool]], int]:
+    rows: list[tuple[EagleItem, dict[str, str], bool]] = []
+    skipped_pending = 0
+    for item in items:
+        fields = parse_annotation_fields(item.annotation)
+        complete = all(fields.get(label) for label in ANNOTATION_LABEL_ORDER)
+        if not complete and not include_pending:
+            skipped_pending += 1
+            continue
+        rows.append((item, fields, complete))
+    return rows, skipped_pending
+
+
+def format_context_metadata(
+    item: EagleItem,
+    fields: dict[str, str],
+    *,
+    source_path: Path | None = None,
+) -> str:
+    parts = [format_image_link(item, fields, source_path=source_path), f"`{item.id}`"]
+    dimensions = format_dimensions(item)
+    if dimensions:
+        parts.append(dimensions)
+    size = format_file_size(item.size)
+    if size:
+        parts.append(size)
+    return " · ".join(parts)
+
+
+def format_image_link(
+    item: EagleItem,
+    fields: dict[str, str],
+    *,
+    source_path: Path | None = None,
+) -> str:
+    display_name = context_image_display_name(item, fields)
+    if not source_path:
+        return display_name
+    return f"[{markdown_link_text(display_name)}](<{source_path}>)"
+
+
+def context_image_display_name(item: EagleItem, fields: dict[str, str]) -> str:
+    stem = one_line(fields.get("Brief") or item.name or item.id).rstrip("。.!！?？")
+    ext = one_line(item.ext)
+    if not ext:
+        return stem
+    suffix = "." + ext.lower()
+    if stem.lower().endswith(suffix):
+        return stem
+    return f"{stem}.{ext}"
+
+
+def markdown_link_text(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+
+def format_dimensions(item: EagleItem) -> str:
+    if item.width and item.height:
+        return f"{item.width}x{item.height}"
+    return ""
+
+
+def format_file_size(size: int | None) -> str:
+    if not isinstance(size, int) or size <= 0:
+        return ""
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{round(size / 1024)} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
+
+
+def format_tags(tags: list[str]) -> str:
+    return " | ".join(one_line(tag) for tag in tags) or "-"
+
+
+def format_palettes(palettes: list[dict[str, Any]]) -> str:
+    values: list[str] = []
+    for palette in palettes:
+        color = palette.get("color")
+        if not (
+            isinstance(color, list)
+            and len(color) == 3
+            and all(isinstance(channel, int) and 0 <= channel <= 255 for channel in color)
+        ):
+            continue
+        ratio = format_palette_ratio(palette.get("ratio"))
+        color_text = "#{:02x}{:02x}{:02x}".format(*color)
+        values.append(f"{color_text} {ratio}" if ratio else color_text)
+    return " | ".join(values)
+
+
+def format_palette_ratio(value: Any) -> str:
+    if not isinstance(value, (int, float)):
+        return ""
+    if float(value).is_integer():
+        return f"{int(value)}%"
+    return f"{value:g}%"
+
+
 def one_line(value: str) -> str:
     return " ".join(str(value or "").split())
+
+
+def export_source_paths(eagle: Any, items: list[EagleItem]) -> dict[str, Path]:
+    image_root = eagle_library_images_root(eagle)
+    paths: dict[str, Path] = {}
+    for item in items:
+        path: Path | None = None
+        if image_root is not None:
+            with contextlib.suppress(Exception):
+                path = locate_original_in_info_dir(image_root / f"{item.id}.info", item)
+        if path is None:
+            with contextlib.suppress(Exception):
+                path = locate_original_from_thumbnail(eagle.thumbnail_path(item.id), item)
+        if path is not None:
+            paths[item.id] = path
+    return paths
+
+
+def eagle_library_images_root(eagle: Any) -> Path | None:
+    with contextlib.suppress(Exception):
+        data = eagle.library_info()
+        if not isinstance(data, dict):
+            return None
+        library = data.get("library")
+        if not isinstance(library, dict):
+            return None
+        raw_path = str(library.get("path") or "").strip()
+        if raw_path:
+            return Path(raw_path).expanduser() / "images"
+    return None
 
 
 def command_export_context(args: argparse.Namespace) -> int:
     eagle = public_attr("EagleClient")(args.eagle_api)
     eagle.app_info()
     board = resolve_board(args.board, eagle.boards())
+    items = eagle.list_items(board.id)
+    rows, _skipped_pending = context_rows(items, include_pending=args.include_pending)
+    source_paths = export_source_paths(eagle, [item for item, _fields, _complete in rows])
     markdown = build_context_markdown(
         board,
-        eagle.list_items(board.id),
+        items,
         include_pending=args.include_pending,
+        source_paths=source_paths,
     )
     if args.output:
         Path(args.output).write_text(markdown, encoding="utf-8")

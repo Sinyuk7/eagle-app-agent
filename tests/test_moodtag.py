@@ -797,7 +797,14 @@ class MoodtagTests(unittest.TestCase):
         self.assertEqual(code, 0)
         text = buffer.getvalue()
         self.assertIn("# Moodboard Context: Board", text)
-        self.assertIn("ID: I2", text)
+        self.assertIn("## 00", text)
+        self.assertIn("[old brief.png](", text)
+        self.assertIn("`I2`", text)
+        self.assertIn("100x200", text)
+        self.assertIn("2 KB", text)
+        self.assertIn("Tags: old tag", text)
+        self.assertIn("Palette: #010203 60% | #fafbfc 2.5%", text)
+        self.assertNotIn("Brief: old brief", text)
         self.assertNotIn("ID: I1", text)
 
     def test_export_context_wrapper_calls_new_subcommand(self):
@@ -805,6 +812,35 @@ class MoodtagTests(unittest.TestCase):
             code = export_moodboard_context.main(["--board", "Board"])
         self.assertEqual(code, 0)
         main.assert_called_once_with(["export-context", "--board", "Board"])
+
+    def test_export_source_paths_use_library_image_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            info = root / "images" / "I2.info"
+            info.mkdir(parents=True)
+            original = info / "brief-source.png"
+            write_png(original)
+            write_png(info / "brief-source_thumbnail.png")
+
+            class LibraryOnlyEagle:
+                def library_info(self):
+                    return {"library": {"path": str(root)}}
+
+                def thumbnail_path(self, item_id):
+                    raise AssertionError(f"thumbnail fallback used for {item_id}")
+
+            item = moodtag.EagleItem(
+                id="I2",
+                name="brief-source",
+                ext="png",
+                tags=[],
+                folders=["B1"],
+                annotation="",
+            )
+            self.assertEqual(
+                moodtag.export_source_paths(LibraryOnlyEagle(), [item]),
+                {"I2": original},
+            )
 
     def test_python_module_help_runs_from_outside_repo(self):
         env = os.environ.copy()
@@ -911,6 +947,13 @@ def make_fake_eagle(
             "Manual\n\nBrief: old brief\n\nElements: old element。\n\nUse: old use\n\nKey: old key\n\n"
             "Camera: old camera\n\nLightColor: old light"
         ),
+        width=100,
+        height=200,
+        size=2048,
+        palettes=[
+            {"color": [1, 2, 3], "ratio": 60},
+            {"color": [250, 251, 252], "ratio": 2.5},
+        ],
     )
     if processed_first:
         items = [processed_item, *pending_items]
