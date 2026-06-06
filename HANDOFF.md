@@ -46,13 +46,6 @@ Partial write for interruption/resume workflows. A later full `tag --write`
 continues remaining pending items and skips already processed ones.
 
 ```sh
-python moodtag.py brief --board '<eagle-folder>' [--output out.md]
-```
-
-Read-only compact Markdown summary. Currently includes item name, Eagle tags,
-and `Brief`.
-
-```sh
 python moodtag.py reset --board '<eagle-folder>' --write
 ```
 
@@ -105,17 +98,16 @@ python scripts/e2e_live_batch.py --board '<eagle-folder>' --preflight-only
 `scripts/e2e_live_batch.py --reset-first` is destructive because it clears the
 target folder before running the live batch.
 
-## Next Script To Add
+## Export Context For Other Agents
 
-Add a read-only export script for other agents/skills:
+Use this read-only script when another agent needs the current folder as context:
 
 ```sh
 python scripts/export_moodboard_context.py --board '<eagle-folder>' [--output context.md]
 ```
 
-Purpose: extract the current Eagle folder into a compact Markdown context
-document for another agent. It should not call the model and must not write to
-Eagle.
+It extracts the current Eagle folder into compact Markdown. It does not call the
+model and does not write to Eagle.
 
 Caller-facing inputs:
 
@@ -124,7 +116,7 @@ Caller-facing inputs:
 - `--include-pending` optional: include items without complete Moodtag
   annotation; default should mark or skip pending items clearly.
 
-Recommended compact output:
+Output shape:
 
 ```md
 # Moodboard Context: <folder path>
@@ -148,3 +140,7 @@ Acceptance criteria:
 - Includes Eagle tags plus the six Moodtag annotation fields.
 - Stable item order matches Eagle list order.
 - Concise enough to paste into another agent as context.
+
+`moodtag.py brief` still exists as an internal lightweight summary command, but
+upper-layer agents should prefer `scripts/export_moodboard_context.py` because it
+exports full annotation plus tags.
