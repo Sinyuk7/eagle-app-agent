@@ -2,15 +2,18 @@
 """Serve a moodboard project directory on localhost for browser QA."""
 
 import argparse
+import contextlib
 import functools
 import http.server
+import io
 import json
 import os
 import socket
 import socketserver
-import subprocess
 import sys
 from pathlib import Path
+
+from . import check as check_core
 
 
 def choose_port(host: str, preferred: int = 0) -> int:
@@ -29,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--preflight-localhost",
         action="store_true",
-        help="Run check_html.py --localhost-mode before serving and refuse unsafe file:// or absolute local asset refs",
+        help="Run the built-in localhost check before serving and refuse unsafe file:// or absolute local asset refs",
     )
     args = parser.parse_args(argv)
 
@@ -50,21 +53,21 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.preflight_localhost:
-        checker = Path(__file__).resolve().parent / "check_html.py"
-        cmd = [
-            sys.executable,
-            str(checker),
+        buffer = io.StringIO()
+        check_argv = [
             str(index_path),
             "--check-assets",
             "--check-links",
             "--localhost-mode",
         ]
-        result = subprocess.run(cmd, text=True, capture_output=True)
-        if result.returncode != 0:
+        with contextlib.redirect_stdout(buffer):
+            check_code = check_core.main(check_argv)
+        check_stdout = buffer.getvalue()
+        if check_code != 0:
             try:
-                payload = json.loads(result.stdout)
+                payload = json.loads(check_stdout)
             except Exception:
-                payload = {"stdout": result.stdout, "stderr": result.stderr}
+                payload = {"stdout": check_stdout, "stderr": ""}
             print(
                 json.dumps(
                     {

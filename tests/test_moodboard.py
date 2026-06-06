@@ -231,6 +231,30 @@ class MoodboardCliTests(unittest.TestCase):
             self.assertEqual(code, 0, output)
             self.assertTrue(json_stdout(output)["ok"])
 
+    def test_serve_preflight_uses_builtin_checker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp)
+            absolute_image = project_dir / "absolute.jpg"
+            absolute_image.write_bytes(b"absolute")
+            (project_dir / "index.html").write_text(
+                f"""<!doctype html>
+<html>
+<head><meta name="viewport" content="width=device-width"><title>Serve</title></head>
+<body>
+<main><img src="{absolute_image}" alt="Absolute asset"></main>
+</body>
+</html>
+""",
+                encoding="utf-8",
+            )
+
+            code, output = run_cli("serve", str(project_dir), "--preflight-localhost")
+            self.assertEqual(code, 3, output)
+            payload = json_stdout(output)
+            self.assertEqual(payload["error"], "localhost_preflight_failed")
+            self.assertIn("localhost_unsafe_assets", payload["check"])
+            self.assertTrue(payload["check"]["localhost_unsafe_assets"])
+
 
 if __name__ == "__main__":
     unittest.main()
