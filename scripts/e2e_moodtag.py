@@ -428,7 +428,7 @@ class E2E:
             env["MOODTAG_BASE_URL"] = vision_base_url
         started = time.monotonic()
         proc = subprocess.run(
-            [self.python, str(ROOT / "moodtag.py"), *args],
+            [self.python, "-m", "moodtag", *args],
             cwd=ROOT,
             env=env,
             text=True,

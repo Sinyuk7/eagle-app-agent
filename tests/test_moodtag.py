@@ -3,15 +3,18 @@ import json
 import io
 import os
 import shutil
+import subprocess
+import sys
 import threading
 import tempfile
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
 import moodtag
+from scripts import export_moodboard_context
 from moodtag_core.contract import (
     DEFAULT_BASE_URL,
     DEFAULT_FALLBACK_BASE_URL,
@@ -31,6 +34,16 @@ PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mP8"
     "z8BQDwAFgwJ/lK3Q2wAAAABJRU5ErkJggg=="
 )
+
+
+@contextmanager
+def chdir(path: Path):
+    previous = Path.cwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
 
 
 def write_png(path: Path) -> None:
@@ -235,6 +248,89 @@ class MoodtagTests(unittest.TestCase):
         self.assertEqual(args.top_p, 0.8)
         self.assertEqual(args.max_tokens, 321)
         self.assertTrue(args.no_response_format)
+
+    def test_user_config_provides_defaults_without_storing_api_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "config.json"
+            env = {
+                "MOODTAG_CONFIG": str(config_path),
+                "MOODTAG_API_KEY": "sk-testSecretShouldNotPersist123456",
+            }
+            with mock.patch.dict(os.environ, env, clear=True):
+                with chdir(root):
+                    stdout = io.StringIO()
+                    with redirect_stdout(stdout):
+                        code = moodtag.main(
+                            [
+                                "config",
+                                "set",
+                                "--base-url",
+                                "https://configured.example/v1",
+                                "--fallback-base-url",
+                                "https://fallback.example/v1",
+                                "--model",
+                                "configured-model",
+                                "--eagle-api",
+                                "http://localhost:49999",
+                            ]
+                        )
+                    self.assertEqual(code, 0)
+                    raw = config_path.read_text(encoding="utf-8")
+                    self.assertIn("configured.example", raw)
+                    self.assertNotIn("sk-testSecret", raw)
+
+                    parser = moodtag.build_parser()
+                    args = parser.parse_args(["tag", "--board", "Board", "--mock-vl"])
+                    self.assertEqual(args.base_url, "https://configured.example/v1")
+                    self.assertEqual(args.fallback_base_url, "https://fallback.example/v1")
+                    self.assertEqual(args.model, "configured-model")
+                    self.assertEqual(args.eagle_api, "http://localhost:49999")
+
+                    buffer = io.StringIO()
+                    with redirect_stdout(buffer):
+                        code = moodtag.main(["config", "show", "--json"])
+                    self.assertEqual(code, 0)
+                    shown = json.loads(buffer.getvalue())
+                    self.assertEqual(shown["api_key"], "set")
+                    self.assertNotIn("sk-testSecret", buffer.getvalue())
+
+    def test_environment_overrides_user_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "base_url": "https://configured.example/v1",
+                        "model": "configured-model",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "MOODTAG_CONFIG": str(config_path),
+                    "MOODTAG_BASE_URL": "https://env.example/v1",
+                    "MOODTAG_MODEL": "env-model",
+                },
+                clear=True,
+            ):
+                parser = moodtag.build_parser()
+                args = parser.parse_args(["tag", "--board", "Board"])
+        self.assertEqual(args.base_url, "https://env.example/v1")
+        self.assertEqual(args.model, "env-model")
+
+    def test_legacy_default_taxonomy_env_uses_bundled_resource(self):
+        with mock.patch.dict(
+            os.environ,
+            {"MOODTAG_TAXONOMY": "taxonomy/default.json"},
+            clear=True,
+        ):
+            parser = moodtag.build_parser()
+            args = parser.parse_args(["tag", "--board", "Board", "--mock-vl"])
+            taxonomy = moodtag.load_taxonomy(args.taxonomy)
+        self.assertIn("medium", taxonomy)
 
     def test_parser_defaults_match_reference_provider_contract(self):
         with mock.patch.dict(os.environ, {}, clear=True):
@@ -637,6 +733,42 @@ class MoodtagTests(unittest.TestCase):
         self.assertEqual(payload["response_format"], {"type": "json_object"})
         self.assertIn("JSON", payload["messages"][0]["content"])
         self.assertIn("JSON", payload["messages"][1]["content"][1]["text"])
+
+    def test_export_context_subcommand_prints_markdown(self):
+        fake, tmp = make_fake_eagle(processed_first=True)
+        buffer = io.StringIO()
+        try:
+            with mock.patch.object(moodtag, "EagleClient", return_value=fake):
+                with redirect_stdout(buffer):
+                    code = moodtag.main(["export-context", "--board", "Board"])
+        finally:
+            tmp.cleanup()
+        self.assertEqual(code, 0)
+        text = buffer.getvalue()
+        self.assertIn("# Moodboard Context: Board", text)
+        self.assertIn("ID: I2", text)
+        self.assertNotIn("ID: I1", text)
+
+    def test_export_context_wrapper_calls_new_subcommand(self):
+        with mock.patch("scripts.export_moodboard_context.moodtag_main", return_value=0) as main:
+            code = export_moodboard_context.main(["--board", "Board"])
+        self.assertEqual(code, 0)
+        main.assert_called_once_with(["export-context", "--board", "Board"])
+
+    def test_python_module_help_runs_from_outside_repo(self):
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+        proc = subprocess.run(
+            [sys.executable, "-m", "moodtag", "--help"],
+            cwd="/tmp",
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("export-context", proc.stdout)
 
     def test_vision_client_uses_fallback_base_url(self):
         requests = []

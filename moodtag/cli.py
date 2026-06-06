@@ -19,13 +19,22 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
 from typing import Any, Iterator
 
+from .config import (
+    ConfigError,
+    load_user_config,
+    public_config_view,
+    update_user_config,
+)
 from moodtag_core.annotation import (
+    ANNOTATION_LABEL_ORDER,
     build_annotation_block,
     extract_brief,
     has_analysis_annotation,
+    parse_annotation_fields,
     remove_analysis_annotation,
     replace_analysis_annotation,
 )
@@ -63,7 +72,8 @@ DEFAULT_IMAGE_EDGE = 1024
 DEFAULT_MAX_TAGS = 15
 DEFAULT_RETRIES = 2
 DEFAULT_USER_AGENT = "moodtag/0.1"
-DEFAULT_TAXONOMY = Path(__file__).resolve().parent / "taxonomy" / "default.json"
+DEFAULT_TAXONOMY = "default"
+LEGACY_DEFAULT_TAXONOMY_PATHS = {"taxonomy/default.json", "./taxonomy/default.json"}
 SUPPORTED_ORIGINAL_EXTS = {
     ".jpg",
     ".jpeg",
@@ -156,12 +166,7 @@ def models_url(base_url: str) -> str:
 
 
 def load_env_defaults() -> None:
-    paths: list[Path] = []
-    for path in (Path(__file__).resolve().parent / ".env", Path.cwd() / ".env"):
-        if path not in paths:
-            paths.append(path)
-    for path in paths:
-        load_env_file(path)
+    load_env_file(Path.cwd() / ".env")
 
 
 def load_env_file(path: Path) -> None:
@@ -239,6 +244,22 @@ def env_bool(name: str, default: bool = False) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     raise MoodtagError(f"{name} must be true or false")
+
+
+def public_attr(name: str) -> Any:
+    package = sys.modules.get("moodtag")
+    if package is not None and hasattr(package, name):
+        return getattr(package, name)
+    return globals()[name]
+
+
+def config_value(
+    config: dict[str, str], env_name: str, config_key: str, default: str
+) -> str:
+    raw = os.environ.get(env_name)
+    if raw is not None and raw.strip():
+        return raw
+    return config.get(config_key) or default
 
 
 def http_request(
@@ -452,9 +473,27 @@ def extract_notes_summary(annotation: str) -> str:
     return extract_brief(annotation)
 
 
-def load_taxonomy(path: Path = DEFAULT_TAXONOMY) -> dict[str, list[str]]:
+def default_taxonomy_text() -> str:
+    return resources.files("moodtag_core.resources.taxonomy").joinpath(
+        "default.json"
+    ).read_text(encoding="utf-8")
+
+
+def is_default_taxonomy_path(path: Path | str | None) -> bool:
+    if path in {None, "", DEFAULT_TAXONOMY}:
+        return True
+    raw = str(path).replace("\\", "/")
+    if raw == DEFAULT_TAXONOMY:
+        return True
+    return raw in LEGACY_DEFAULT_TAXONOMY_PATHS and not Path(path).exists()
+
+
+def load_taxonomy(path: Path | str | None = DEFAULT_TAXONOMY) -> dict[str, list[str]]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        if is_default_taxonomy_path(path):
+            data = json.loads(default_taxonomy_text())
+        else:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise MoodtagError(f"Taxonomy file not found: {path}") from exc
     except json.JSONDecodeError as exc:
@@ -663,7 +702,7 @@ def normalize_vl_result(
     taxonomy: dict[str, list[str]] | None = None,
     max_tags: int = DEFAULT_MAX_TAGS,
 ) -> MoodtagAnalysis:
-    taxonomy = taxonomy or load_taxonomy(DEFAULT_TAXONOMY)
+    taxonomy = taxonomy or load_taxonomy()
     try:
         if isinstance(data, str):
             return parse_analysis_response(
@@ -748,7 +787,7 @@ def validate_tag_args(args: argparse.Namespace) -> None:
 
 
 def command_status(args: argparse.Namespace) -> int:
-    eagle = EagleClient(args.eagle_api)
+    eagle = public_attr("EagleClient")(args.eagle_api)
     eagle.app_info()
     board = resolve_board(args.board, eagle.boards())
     items = eagle.list_items(board.id)
@@ -764,11 +803,72 @@ def command_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def build_context_markdown(
+    board: Board,
+    items: list[EagleItem],
+    *,
+    include_pending: bool = False,
+) -> str:
+    rows: list[tuple[EagleItem, dict[str, str], bool]] = []
+    skipped_pending = 0
+    for item in items:
+        fields = parse_annotation_fields(item.annotation)
+        complete = all(fields.get(label) for label in ANNOTATION_LABEL_ORDER)
+        if not complete and not include_pending:
+            skipped_pending += 1
+            continue
+        rows.append((item, fields, complete))
+
+    lines = [
+        f"# Moodboard Context: {board.path}",
+        "",
+        f"Items: {len(items)}",
+        f"Exported: {len(rows)}",
+        f"Pending skipped: {skipped_pending}",
+        "",
+    ]
+
+    for index, (item, fields, complete) in enumerate(rows, start=1):
+        lines.append(f"## {index}. {one_line(item.name)}")
+        lines.append(f"ID: {item.id}")
+        if not complete:
+            lines.append("Status: pending")
+        lines.append("Tags: " + (", ".join(one_line(tag) for tag in item.tags) or "-"))
+        for label in ANNOTATION_LABEL_ORDER:
+            value = one_line(fields.get(label, ""))
+            if value or include_pending:
+                lines.append(f"{label}: {value or '-'}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def one_line(value: str) -> str:
+    return " ".join(str(value or "").split())
+
+
+def command_export_context(args: argparse.Namespace) -> int:
+    eagle = public_attr("EagleClient")(args.eagle_api)
+    eagle.app_info()
+    board = resolve_board(args.board, eagle.boards())
+    markdown = build_context_markdown(
+        board,
+        eagle.list_items(board.id),
+        include_pending=args.include_pending,
+    )
+    if args.output:
+        Path(args.output).write_text(markdown, encoding="utf-8")
+        print(f"Wrote {args.output}")
+    else:
+        print(markdown, end="")
+    return 0
+
+
 def command_tag(args: argparse.Namespace) -> int:
     validate_tag_args(args)
     taxonomy = load_taxonomy(Path(args.taxonomy))
-    vision = make_vision_client(args)
-    eagle = EagleClient(args.eagle_api)
+    vision = public_attr("make_vision_client")(args)
+    eagle = public_attr("EagleClient")(args.eagle_api)
     eagle.app_info()
     board = resolve_board(args.board, eagle.boards())
     items = eagle.list_items(board.id)
@@ -828,7 +928,7 @@ def command_tag(args: argparse.Namespace) -> int:
 
 
 def command_brief(args: argparse.Namespace) -> int:
-    eagle = EagleClient(args.eagle_api)
+    eagle = public_attr("EagleClient")(args.eagle_api)
     eagle.app_info()
     board = resolve_board(args.board, eagle.boards())
     items = eagle.list_items(board.id)
@@ -883,7 +983,7 @@ def escape_md(text: str) -> str:
 
 
 def command_reset(args: argparse.Namespace) -> int:
-    eagle = EagleClient(args.eagle_api)
+    eagle = public_attr("EagleClient")(args.eagle_api)
     eagle.app_info()
     board = resolve_board(args.board, eagle.boards())
     items = eagle.list_items(board.id)
@@ -902,15 +1002,51 @@ def command_reset(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_config_set(args: argparse.Namespace) -> int:
+    values = {
+        "base_url": args.base_url,
+        "fallback_base_url": args.fallback_base_url,
+        "model": args.model,
+        "eagle_api": args.eagle_api,
+    }
+    values = {key: value for key, value in values.items() if value}
+    if not values:
+        raise MoodtagError("Pass at least one config value to set")
+    path = update_user_config(values)
+    print(f"Wrote {path}")
+    return 0
+
+
+def command_config_show(args: argparse.Namespace) -> int:
+    config = load_user_config()
+    view = public_config_view(
+        config,
+        api_key_set=bool(os.environ.get("MOODTAG_API_KEY") or os.environ.get("VL_API_KEY")),
+    )
+    if args.json:
+        print(json.dumps(view, ensure_ascii=False, sort_keys=True))
+        return 0
+    print(f"Config: {view['config_path']}")
+    print(f"base_url: {view['base_url'] or '-'}")
+    print(f"fallback_base_url: {view['fallback_base_url'] or '-'}")
+    print(f"model: {view['model'] or '-'}")
+    print(f"eagle_api: {view['eagle_api'] or '-'}")
+    print(f"api_key: {view['api_key']}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="moodtag")
     sub = parser.add_subparsers(dest="command", required=True)
+    user_config = load_user_config()
 
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument("--board", required=True, help="Eagle folder id, name, or path")
         p.add_argument(
             "--eagle-api",
-            default=os.environ.get("MOODTAG_EAGLE_API", DEFAULT_EAGLE_API),
+            default=config_value(
+                user_config, "MOODTAG_EAGLE_API", "eagle_api", DEFAULT_EAGLE_API
+            ),
         )
 
     status = sub.add_parser("status", help="Show board tagging status")
@@ -923,15 +1059,26 @@ def build_parser() -> argparse.ArgumentParser:
     tag.add_argument("--write", action="store_true", help="Actually update Eagle")
     tag.add_argument("--force", action="store_true", help="Reprocess existing notes")
     tag.add_argument("--mock-vl", action="store_true", help="Use deterministic mock VL")
-    tag.add_argument("--base-url", default=os.environ.get("MOODTAG_BASE_URL", DEFAULT_BASE_URL))
+    tag.add_argument(
+        "--base-url",
+        default=config_value(user_config, "MOODTAG_BASE_URL", "base_url", DEFAULT_BASE_URL),
+    )
     tag.add_argument(
         "--fallback-base-url",
-        default=os.environ.get("MOODTAG_FALLBACK_BASE_URL", DEFAULT_FALLBACK_BASE_URL),
+        default=config_value(
+            user_config,
+            "MOODTAG_FALLBACK_BASE_URL",
+            "fallback_base_url",
+            DEFAULT_FALLBACK_BASE_URL,
+        ),
     )
-    tag.add_argument("--model", default=os.environ.get("MOODTAG_MODEL", DEFAULT_MODEL))
+    tag.add_argument(
+        "--model",
+        default=config_value(user_config, "MOODTAG_MODEL", "model", DEFAULT_MODEL),
+    )
     tag.add_argument(
         "--taxonomy",
-        default=os.environ.get("MOODTAG_TAXONOMY", str(DEFAULT_TAXONOMY)),
+        default=os.environ.get("MOODTAG_TAXONOMY", DEFAULT_TAXONOMY),
     )
     tag.add_argument(
         "--image-edge",
@@ -983,10 +1130,34 @@ def build_parser() -> argparse.ArgumentParser:
     brief.add_argument("--output", default="")
     brief.set_defaults(func=command_brief)
 
+    export = sub.add_parser(
+        "export-context", help="Export a board as compact Markdown context"
+    )
+    common(export)
+    export.add_argument("--output", default="", help="Write Markdown to this file")
+    export.add_argument(
+        "--include-pending",
+        action="store_true",
+        help="Include items without complete Moodtag annotation",
+    )
+    export.set_defaults(func=command_export_context)
+
     reset = sub.add_parser("reset", help="Remove moodtag annotation fields from board items")
     common(reset)
     reset.add_argument("--write", action="store_true")
     reset.set_defaults(func=command_reset)
+
+    config = sub.add_parser("config", help="Manage non-secret moodtag defaults")
+    config_sub = config.add_subparsers(dest="config_command", required=True)
+    config_set = config_sub.add_parser("set", help="Set non-secret user defaults")
+    config_set.add_argument("--base-url", default="")
+    config_set.add_argument("--fallback-base-url", default="")
+    config_set.add_argument("--model", default="")
+    config_set.add_argument("--eagle-api", default="")
+    config_set.set_defaults(func=command_config_set)
+    config_show = config_sub.add_parser("show", help="Show non-secret user defaults")
+    config_show.add_argument("--json", action="store_true")
+    config_show.set_defaults(func=command_config_show)
     return parser
 
 
@@ -997,6 +1168,9 @@ def main(argv: list[str] | None = None) -> int:
         args = parser.parse_args(argv)
         return int(args.func(args) or 0)
     except MoodtagError as exc:
+        print(f"error: {redact(str(exc))}", file=sys.stderr)
+        return 2
+    except ConfigError as exc:
         print(f"error: {redact(str(exc))}", file=sys.stderr)
         return 2
 

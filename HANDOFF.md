@@ -7,10 +7,22 @@ read-only or writes Eagle metadata.
 
 ## Caller-Facing Entry Points
 
-Run commands from the repo root.
+Run commands from any directory after installing the CLI. Upper-layer agents
+should depend on the `moodtag ...` command, not on this repo's filesystem path.
+
+Provider defaults are maintainer setup:
 
 ```sh
-python moodtag.py status --board '<eagle-folder>'
+moodtag config set --base-url 'https://.../v1'
+export MOODTAG_API_KEY='sk-...'
+```
+
+`moodtag config` stores non-secret defaults only. API keys must be supplied by
+environment variable (`MOODTAG_API_KEY`, or legacy `VL_API_KEY`) and should not
+be written into skills, command history, or config files.
+
+```sh
+moodtag status --board '<eagle-folder>'
 ```
 
 Read-only health check. Use this before write operations. It prints item count,
@@ -18,35 +30,35 @@ processed count, and pending count. Add `--verbose` only when the caller needs
 item ids and item names.
 
 ```sh
-python moodtag.py tag --board '<eagle-folder>'
+moodtag tag --board '<eagle-folder>'
 ```
 
 Read-only dry run. Calls the configured vision model and prints what would be
 processed, but does not update Eagle. Useful for a quick smoke check.
 
 ```sh
-python moodtag.py tag --board '<eagle-folder>' --write
+moodtag tag --board '<eagle-folder>' --write
 ```
 
 Main write operation. Processes pending items and overwrites each processed
 item's Eagle `tags` and `annotation` with Moodtag output.
 
 ```sh
-python moodtag.py tag --board '<eagle-folder>' --write --force
+moodtag tag --board '<eagle-folder>' --write --force
 ```
 
 Reprocesses already annotated items and overwrites existing Moodtag output. Use
 this after prompt/contract changes.
 
 ```sh
-python moodtag.py tag --board '<eagle-folder>' --write --limit N
+moodtag tag --board '<eagle-folder>' --write --limit N
 ```
 
 Partial write for interruption/resume workflows. A later full `tag --write`
 continues remaining pending items and skips already processed ones.
 
 ```sh
-python moodtag.py reset --board '<eagle-folder>' --write
+moodtag reset --board '<eagle-folder>' --write
 ```
 
 Destructive test/reset command. Clears both Eagle `annotation` and `tags` for
@@ -100,10 +112,10 @@ target folder before running the live batch.
 
 ## Export Context For Other Agents
 
-Use this read-only script when another agent needs the current folder as context:
+Use this read-only command when another agent needs the current folder as context:
 
 ```sh
-python scripts/export_moodboard_context.py --board '<eagle-folder>' [--output context.md]
+moodtag export-context --board '<eagle-folder>' [--output context.md]
 ```
 
 It extracts the current Eagle folder into compact Markdown. It does not call the
@@ -141,6 +153,6 @@ Acceptance criteria:
 - Stable item order matches Eagle list order.
 - Concise enough to paste into another agent as context.
 
-`moodtag.py brief` still exists as an internal lightweight summary command, but
-upper-layer agents should prefer `scripts/export_moodboard_context.py` because it
-exports full annotation plus tags.
+`moodtag brief` still exists as an internal lightweight summary command, but
+upper-layer agents should prefer `moodtag export-context` because it exports
+full annotation plus tags.

@@ -15,14 +15,24 @@ The tool does not create staging image folders, sidecar caches, or default repor
 ## Setup
 
 ```sh
-uv venv .venv --python /Users/sinyuk/.local/share/mise/installs/python/3.14.5/bin/python3
-uv pip install -r requirements.txt --python .venv/bin/python
-cp .env.example .env
+uv tool install --editable /Users/sinyuk/Documents/github/eagle-app-agent
+moodtag config set --base-url https://hk.n1n.ai/v1 \
+  --fallback-base-url https://api.n1n.ai/v1 \
+  --model Qwen3.5-122B-A10B
+export MOODTAG_API_KEY=...
 ```
 
-Edit `.env` with the local Eagle API address and model credentials. `moodtag`
-loads `.env` automatically without overriding variables already exported in the
-shell.
+`moodtag config` stores non-secret defaults in the user config file. Keep API
+keys in environment variables; do not write them into skills, command history,
+or config files. `moodtag` also loads a `.env` from the current working
+directory without overriding variables already exported in the shell.
+
+For local development and tests:
+
+```sh
+uv venv .venv --python /Users/sinyuk/.local/share/mise/installs/python/3.14.5/bin/python3
+uv pip install -e . --python .venv/bin/python
+```
 
 Key settings:
 
@@ -34,32 +44,29 @@ Key settings:
 | `MOODTAG_MODEL` | `Qwen3.5-122B-A10B` | Vision/chat model name. |
 | `MOODTAG_API_KEY` | empty | Vision API key. Required unless `--mock-vl` is used. |
 | `VL_API_KEY` | empty | Backward-compatible fallback API key. |
-| `MOODTAG_TAXONOMY` | `taxonomy/default.json` | Tag taxonomy JSON file. |
+| `MOODTAG_TAXONOMY` | bundled default | Optional custom tag taxonomy JSON file. |
 | `MOODTAG_IMAGE_EDGE` | `1024` | Preview image long edge sent to the model. |
 | `MOODTAG_TEMPERATURE` | `0.6` | Model temperature. |
 | `MOODTAG_TOP_P` | `0.85` | Model top-p. |
 | `MOODTAG_MAX_TOKENS` | `1028` | Max output tokens. |
 | `MOODTAG_NO_RESPONSE_FORMAT` | `false` | `false` sends JSON Mode: `response_format={"type":"json_object"}`. Set `true` only for providers that reject JSON Mode. |
 
-```sh
-MOODTAG_API_KEY=...
-MOODTAG_MODEL=Qwen3.5-122B-A10B
-```
-
 CLI flags such as `--eagle-api`, `--base-url`, `--fallback-base-url`, `--model`,
 `--taxonomy`, `--image-edge`, `--max-tags`, `--retries`, `--temperature`,
-`--top-p`, and `--max-tokens` override the environment defaults for a single
-run. JSON Mode is on by default for the reference Qwen provider contract; pass
-`--no-response-format` only when testing a provider that does not support it.
+`--top-p`, and `--max-tokens` override environment and config defaults for a
+single run. Precedence is: CLI flags, environment/current-directory `.env`, user
+config, built-in defaults. JSON Mode is on by default for the reference Qwen
+provider contract; pass `--no-response-format` only when testing a provider that
+does not support it.
 
 ## Usage
 
 ```sh
-.venv/bin/python moodtag.py status --board '明日方舟 - 小红书'
-.venv/bin/python moodtag.py tag --board '明日方舟 - 小红书' --mock-vl
-.venv/bin/python moodtag.py tag --board '明日方舟 - 小红书' --write
-.venv/bin/python moodtag.py brief --board '明日方舟 - 小红书'
-.venv/bin/python moodtag.py reset --board '明日方舟 - 小红书'
+moodtag status --board '明日方舟 - 小红书'
+moodtag tag --board '明日方舟 - 小红书' --mock-vl
+MOODTAG_API_KEY=... moodtag tag --board '明日方舟 - 小红书' --write
+moodtag export-context --board '明日方舟 - 小红书'
+moodtag brief --board '明日方舟 - 小红书'
 ```
 
 `tag` is a dry run unless `--write` is passed.
@@ -102,9 +109,9 @@ write to a real Eagle library and do not call a real model API.
 Read-only real smoke checks:
 
 ```sh
-.venv/bin/python moodtag.py status --board '<folder-id-or-name>'
-.venv/bin/python moodtag.py tag --board '<folder-id-or-name>' --mock-vl --limit 1
-.venv/bin/python moodtag.py tag --board '<folder-id-or-name>' --limit 1
+moodtag status --board '<folder-id-or-name>'
+moodtag tag --board '<folder-id-or-name>' --mock-vl --limit 1
+MOODTAG_API_KEY=... moodtag tag --board '<folder-id-or-name>' --limit 1
 ```
 
 The last command calls the configured vision API but is still a dry run. Only add
@@ -123,8 +130,8 @@ the regression suite stable and avoids repeatedly calling the external model
 gateway while still verifying the same `/v1/chat/completions` request shape.
 
 ```sh
-.venv/bin/python scripts/e2e_moodtag.py
-.venv/bin/python scripts/e2e_moodtag.py --board '__moodtag_e2e__'
+python scripts/e2e_moodtag.py
+python scripts/e2e_moodtag.py --board '__moodtag_e2e__'
 ```
 
 Covered E2E cases:
@@ -143,7 +150,7 @@ to simulate interruption, resumes the remaining items, then runs the same batch
 again to verify repeat execution skips already processed items.
 
 ```sh
-MOODTAG_API_KEY=... .venv/bin/python scripts/e2e_live_batch.py --board '明日方舟 - 小红书'
+MOODTAG_API_KEY=... python scripts/e2e_live_batch.py --board '明日方舟 - 小红书'
 ```
 
 The live script uses the same provider contract as the CLI: `Qwen3.5-122B-A10B`,

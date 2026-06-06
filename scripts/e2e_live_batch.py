@@ -56,7 +56,7 @@ def parse_count(label: str, stdout: str) -> int | None:
 def run_moodtag(args: list[str], env: dict[str, str], *, label: str) -> RunResult:
     started = time.monotonic()
     proc = subprocess.run(
-        [env.get("MOODTAG_PYTHON", sys.executable), str(ROOT / "moodtag.py"), *args],
+        [env.get("MOODTAG_PYTHON", sys.executable), "-m", "moodtag", *args],
         cwd=ROOT,
         env=env,
         text=True,
@@ -234,7 +234,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--discover-models", action="store_true")
     parser.add_argument(
         "--taxonomy",
-        default=os.environ.get("MOODTAG_TAXONOMY", str(moodtag.DEFAULT_TAXONOMY)),
+        default=os.environ.get("MOODTAG_TAXONOMY", moodtag.DEFAULT_TAXONOMY),
     )
     parser.add_argument(
         "--image-edge",
