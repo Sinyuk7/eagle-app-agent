@@ -27,7 +27,6 @@ sys.path.insert(0, str(ROOT))
 
 import moodtag  # noqa: E402
 
-
 TEST_FOLDER = "__moodtag_e2e__"
 ITEM_PREFIX = "moodtag-e2e-"
 E2E_API_KEY = "sk-e2eLocalStubForMoodtagOnly123456"
@@ -73,7 +72,7 @@ class VisionStub:
             raise RuntimeError("server is not running")
         return f"http://127.0.0.1:{self._server.server_port}"
 
-    def __enter__(self) -> "VisionStub":
+    def __enter__(self) -> VisionStub:
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -101,7 +100,13 @@ class VisionStub:
 
                 result = {
                     "brief": "白发测试角色站在中性背景前，身穿黑色测试服并佩戴蓝色道具。",
-                    "elements": ["白发测试角色", "黑色测试服", "蓝色道具", "中性背景", "角色配饰"],
+                    "elements": [
+                        "白发测试角色",
+                        "黑色测试服",
+                        "蓝色道具",
+                        "中性背景",
+                        "角色配饰",
+                    ],
                     "use": "主要用于 E2E 流程验证，也可作为无 wrapper annotation 测试参考。",
                     "key": "核心是确认模型 JSON 能拆成自然语言备注和 Eagle tags。",
                     "camera": "中景平视构图，standard lens feel，主体居中。",
@@ -122,7 +127,12 @@ class VisionStub:
                     }
                 body = {
                     "choices": [
-                        {"message": {"role": "assistant", "content": json.dumps(result)}}
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": json.dumps(result),
+                            }
+                        }
                     ]
                 }
                 data = json.dumps(body).encode("utf-8")
@@ -194,7 +204,9 @@ class E2E:
                 result = case()
                 results.append(result)
             except Exception as exc:  # noqa: BLE001 - keep suite diagnostics
-                results.append(CaseResult(case.__name__, False, moodtag.redact(str(exc))))
+                results.append(
+                    CaseResult(case.__name__, False, moodtag.redact(str(exc)))
+                )
         self.cleanup_test_items()
         return results
 
@@ -223,7 +235,9 @@ class E2E:
 
         updated = self.eagle.item_info(item.id)
         assert_true(moodtag.has_moodboard_notes(updated.annotation), "notes written")
-        assert_true("[Moodboard Notes]" not in updated.annotation, "wrapper not written")
+        assert_true(
+            "[Moodboard Notes]" not in updated.annotation, "wrapper not written"
+        )
         assert_true("Tags:" not in updated.annotation, "tags not written in annotation")
         assert_true("Elements:" in updated.annotation, "elements written")
         assert_true("photo" in updated.tags, "photo tag written")
@@ -309,7 +323,9 @@ class E2E:
             assert_ok(result, "force tag should succeed")
             assert_equal(len(stub.requests), 1, "force request count")
         updated = self.eagle.item_info(item.id)
-        assert_true(moodtag.has_moodboard_notes(updated.annotation), "force wrote notes")
+        assert_true(
+            moodtag.has_moodboard_notes(updated.annotation), "force wrote notes"
+        )
         assert_true("old brief" not in updated.annotation, "old annotation overwritten")
         assert_true("Elements:" in updated.annotation, "new elements written")
         assert_true("manual old tag" not in updated.tags, "old tags overwritten")
@@ -370,7 +386,9 @@ class E2E:
             assert_ok(result, "retry tag should succeed")
             assert_equal(len(stub.requests), 2, "retry request count")
         updated = self.eagle.item_info(item.id)
-        assert_true(moodtag.has_moodboard_notes(updated.annotation), "retry wrote notes")
+        assert_true(
+            moodtag.has_moodboard_notes(updated.annotation), "retry wrote notes"
+        )
         return CaseResult(
             "failure_retry",
             True,
@@ -398,7 +416,9 @@ class E2E:
             )
             assert_equal(result.returncode, 1, "empty result exit")
             assert_equal(len(stub.requests), 1, "empty result request count")
-            assert_in("VL result missing required field: brief", result.stdout, "failure text")
+            assert_in(
+                "VL result missing required field: brief", result.stdout, "failure text"
+            )
         current = self.eagle.item_info(item.id)
         assert_true(
             not moodtag.has_moodboard_notes(current.annotation),
@@ -432,8 +452,7 @@ class E2E:
             cwd=ROOT,
             env=env,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=False,
         )
         return CommandResult(

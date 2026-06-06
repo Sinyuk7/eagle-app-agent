@@ -9,7 +9,6 @@ from typing import Any
 from .contract import ANNOTATION_FIELDS, CoreError, MoodtagAnalysis
 from .taxonomy import reconcile_tags, reconcile_use_intents
 
-
 MARKDOWN_FENCE_RE = re.compile(r"```(?:[a-zA-Z0-9_-]+)?\s*([\s\S]*?)\s*```")
 
 

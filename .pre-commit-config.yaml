@@ -1,0 +1,22 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.13
+    hooks:
+      - id: ruff-format
+      - id: ruff
+        args: ["--fix"]
+
+  - repo: local
+    hooks:
+      - id: compileall
+        name: compile Python sources
+        entry: python -m compileall -q moodtag moodtag_core scripts tests
+        language: system
+        pass_filenames: false
+
+      - id: local-release-check
+        name: local release check
+        entry: scripts/release_check.sh
+        language: script
+        pass_filenames: false
+        stages: [pre-push]

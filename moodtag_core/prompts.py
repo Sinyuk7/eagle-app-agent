@@ -5,9 +5,8 @@ from __future__ import annotations
 from importlib import resources
 from pathlib import Path
 
-from .contract import CoreError, JSON_TEMPLATE
+from .contract import JSON_TEMPLATE, CoreError
 from .taxonomy import render_taxonomy_for_prompt, render_use_intents_for_prompt
-
 
 PROMPT_PACKAGE = "moodtag_core.resources.prompts"
 SYSTEM_PROMPT_NAME = "moodtag-system-prompt.txt"
@@ -19,9 +18,12 @@ USER_PROMPT_PATH = Path(USER_PROMPT_NAME)
 def read_template(path: Path | None = None, *, resource_name: str | None = None) -> str:
     try:
         if resource_name:
-            text = resources.files(PROMPT_PACKAGE).joinpath(resource_name).read_text(
-                encoding="utf-8"
-            ).strip()
+            text = (
+                resources.files(PROMPT_PACKAGE)
+                .joinpath(resource_name)
+                .read_text(encoding="utf-8")
+                .strip()
+            )
             label = resource_name
         elif path is not None:
             text = path.read_text(encoding="utf-8").strip()
@@ -41,11 +43,11 @@ def read_system_prompt(path: Path | None = None) -> str:
     return read_template(resource_name=SYSTEM_PROMPT_NAME)
 
 
-def render_user_prompt(
-    taxonomy: dict[str, list[str]], path: Path | None = None
-) -> str:
-    template = read_template(path) if path is not None else read_template(
-        resource_name=USER_PROMPT_NAME
+def render_user_prompt(taxonomy: dict[str, list[str]], path: Path | None = None) -> str:
+    template = (
+        read_template(path)
+        if path is not None
+        else read_template(resource_name=USER_PROMPT_NAME)
     )
     return (
         template.replace("{{json_template}}", JSON_TEMPLATE)

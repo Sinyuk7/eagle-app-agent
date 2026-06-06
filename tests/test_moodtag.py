@@ -1,12 +1,12 @@
 import base64
-import json
 import io
+import json
 import os
 import shutil
 import subprocess
 import sys
-import threading
 import tempfile
+import threading
 import unittest
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 import moodtag
-from scripts import export_moodboard_context
+from moodtag_core.annotation import build_annotation_block
 from moodtag_core.contract import (
     DEFAULT_BASE_URL,
     DEFAULT_FALLBACK_BASE_URL,
@@ -24,11 +24,10 @@ from moodtag_core.contract import (
     DEFAULT_TEMPERATURE,
     DEFAULT_TOP_P,
 )
-from moodtag_core.annotation import build_annotation_block
 from moodtag_core.prompts import read_system_prompt, render_user_prompt
 from moodtag_core.response import normalize_analysis_json
 from moodtag_core.taxonomy import render_taxonomy_for_prompt
-
+from scripts import export_moodboard_context
 
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mP8"
@@ -334,7 +333,9 @@ class MoodtagTests(unittest.TestCase):
                     parser = moodtag.build_parser()
                     args = parser.parse_args(["tag", "--board", "Board", "--mock-vl"])
                     self.assertEqual(args.base_url, "https://configured.example/v1")
-                    self.assertEqual(args.fallback_base_url, "https://fallback.example/v1")
+                    self.assertEqual(
+                        args.fallback_base_url, "https://fallback.example/v1"
+                    )
                     self.assertEqual(args.model, "configured-model")
                     self.assertEqual(args.eagle_api, "http://localhost:49999")
 
@@ -478,7 +479,9 @@ class MoodtagTests(unittest.TestCase):
             max_tags=10,
         )
         self.assertEqual(len(analysis.elements), 10)
-        self.assertEqual(analysis.elements[:4], ["白发少女", "角饰", "黑色战术服", "蓝色弹药带"])
+        self.assertEqual(
+            analysis.elements[:4], ["白发少女", "角饰", "黑色战术服", "蓝色弹药带"]
+        )
         self.assertNotIn("", analysis.elements)
 
     def test_response_contract_accepts_light_color_alias(self):
@@ -489,7 +492,10 @@ class MoodtagTests(unittest.TestCase):
             taxonomy={"medium": ["photo"]},
             max_tags=10,
         )
-        self.assertEqual(analysis.light_color, "soft directional light 为主，neutral tone，整体干净。")
+        self.assertEqual(
+            analysis.light_color,
+            "soft directional light 为主，neutral tone，整体干净。",
+        )
 
     def test_annotation_formatter_uses_natural_language_fields_only(self):
         analysis = normalize_analysis_json(
@@ -499,7 +505,10 @@ class MoodtagTests(unittest.TestCase):
         )
         annotation = build_annotation_block(analysis)
         self.assertTrue(annotation.startswith("Brief: "))
-        self.assertIn("\n\nElements: 白发少女；角饰；黑色战术服；蓝色弹药带；户外街道。", annotation)
+        self.assertIn(
+            "\n\nElements: 白发少女；角饰；黑色战术服；蓝色弹药带；户外街道。",
+            annotation,
+        )
         self.assertIn("\n\nUse: ", annotation)
         self.assertIn("\n\nKey: ", annotation)
         self.assertIn("\n\nCamera: ", annotation)
@@ -520,7 +529,9 @@ class MoodtagTests(unittest.TestCase):
             item = moodtag.EagleItem(
                 id="I1", name="image", ext="png", tags=[], folders=["B1"], annotation=""
             )
-            self.assertEqual(moodtag.locate_original_from_thumbnail(thumb, item), original)
+            self.assertEqual(
+                moodtag.locate_original_from_thumbnail(thumb, item), original
+            )
 
     def test_temporary_preview_deletes_file(self):
         if not shutil.which("sips"):
@@ -560,7 +571,9 @@ class MoodtagTests(unittest.TestCase):
         argv = ["tag", "--board", "Board", "--write", "--limit", "1"]
         try:
             with mock.patch.object(moodtag, "EagleClient", return_value=fake):
-                with mock.patch.object(moodtag, "make_vision_client", return_value=EmptyVision()):
+                with mock.patch.object(
+                    moodtag, "make_vision_client", return_value=EmptyVision()
+                ):
                     with redirect_stdout(io.StringIO()):
                         code = moodtag.main(argv)
         finally:
@@ -584,7 +597,9 @@ class MoodtagTests(unittest.TestCase):
         self.assertEqual(len(fake.updated), 1)
         item_id, tags, annotation = fake.updated[0]
         self.assertEqual(item_id, "I1")
-        self.assertEqual(tags, ["photo", "portrait", "beauty", "lighting ref", "pose ref"])
+        self.assertEqual(
+            tags, ["photo", "portrait", "beauty", "lighting ref", "pose ref"]
+        )
         self.assertNotIn("manual old tag", tags)
         self.assertIn("Brief:", annotation)
         self.assertIn("Elements:", annotation)
@@ -622,7 +637,9 @@ class MoodtagTests(unittest.TestCase):
         self.assertEqual({item_id for item_id, _, _ in fake.updated}, {"I1", "I2"})
         forced = [update for update in fake.updated if update[0] == "I2"][0]
         _, tags, annotation = forced
-        self.assertEqual(tags, ["photo", "portrait", "beauty", "lighting ref", "pose ref"])
+        self.assertEqual(
+            tags, ["photo", "portrait", "beauty", "lighting ref", "pose ref"]
+        )
         self.assertNotIn("old tag", tags)
         self.assertNotIn("old brief", annotation)
         self.assertIn("Brief: 模拟角色", annotation)
@@ -707,9 +724,7 @@ class MoodtagTests(unittest.TestCase):
                     api_key="sk-testSecretForRetry123456",
                 )
                 with mock.patch.object(moodtag.time, "sleep"):
-                    result = client.analyze(
-                        image, {"medium": ["photo"]}, retries=1
-                    )
+                    result = client.analyze(image, {"medium": ["photo"]}, retries=1)
         finally:
             server.shutdown()
             server.server_close()
@@ -765,9 +780,14 @@ class MoodtagTests(unittest.TestCase):
         self.assertNotIn("response_format", payload)
         user_content = payload["messages"][1]["content"]
         self.assertEqual(user_content[0]["type"], "image_url")
-        self.assertTrue(user_content[0]["image_url"]["url"].startswith("data:image/jpeg;base64,"))
+        self.assertTrue(
+            user_content[0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+        )
         self.assertEqual(user_content[1]["type"], "text")
-        self.assertIn('"brief":"","elements":[],"use":"","key":"","camera":"","light_color":"","tags":[],"use_intents":[]', user_content[1]["text"])
+        self.assertIn(
+            '"brief":"","elements":[],"use":"","key":"","camera":"","light_color":"","tags":[],"use_intents":[]',
+            user_content[1]["text"],
+        )
         self.assertIn("medium: photo", user_content[1]["text"])
         self.assertNotIn('{\n  "medium"', user_content[1]["text"])
 
@@ -808,7 +828,9 @@ class MoodtagTests(unittest.TestCase):
         self.assertNotIn("ID: I1", text)
 
     def test_export_context_wrapper_calls_new_subcommand(self):
-        with mock.patch("scripts.export_moodboard_context.moodtag_main", return_value=0) as main:
+        with mock.patch(
+            "scripts.export_moodboard_context.moodtag_main", return_value=0
+        ) as main:
             code = export_moodboard_context.main(["--board", "Board"])
         self.assertEqual(code, 0)
         main.assert_called_once_with(["export-context", "--board", "Board"])
@@ -850,8 +872,7 @@ class MoodtagTests(unittest.TestCase):
             cwd="/tmp",
             env=env,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=False,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)

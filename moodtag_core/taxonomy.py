@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .contract import CoreError, USE_INTENT_TAGS
+from .contract import USE_INTENT_TAGS, CoreError
 
 
 def load_taxonomy(path: Path) -> dict[str, list[str]]:
@@ -38,9 +38,7 @@ def flatten_taxonomy(taxonomy: dict[str, list[str]]) -> dict[str, str]:
 
 
 def render_taxonomy_for_prompt(taxonomy: dict[str, list[str]]) -> str:
-    return "\n".join(
-        f"{group}: {' | '.join(tags)}" for group, tags in taxonomy.items()
-    )
+    return "\n".join(f"{group}: {' | '.join(tags)}" for group, tags in taxonomy.items())
 
 
 def render_use_intents_for_prompt() -> str:
@@ -65,7 +63,9 @@ def reconcile_tags(
     return resolved[:max_tags], rejected
 
 
-def reconcile_use_intents(use_intents: list[str]) -> tuple[list[str], list[str], list[str]]:
+def reconcile_use_intents(
+    use_intents: list[str],
+) -> tuple[list[str], list[str], list[str]]:
     resolved_tags: list[str] = []
     accepted: list[str] = []
     rejected: list[str] = []
@@ -84,4 +84,3 @@ def reconcile_use_intents(use_intents: list[str]) -> tuple[list[str], list[str],
         elif intent and intent.lower() not in {value.lower() for value in rejected}:
             rejected.append(intent)
     return resolved_tags, accepted, rejected
-

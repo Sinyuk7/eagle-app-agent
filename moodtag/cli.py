@@ -14,21 +14,16 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
+import time  # noqa: F401 - public compatibility for tests and external patching
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
-from .config import (
-    ConfigError,
-    load_user_config,
-    public_config_view,
-    update_user_config,
-)
 from moodtag_core.annotation import (
     ANNOTATION_LABEL_ORDER,
     build_annotation_block,
@@ -51,20 +46,14 @@ from moodtag_core.contract import (
 )
 from moodtag_core.provider import (
     VisionClient as CoreVisionClient,
-    chat_completions_url,
-    file_to_data_url,
-    http_request,
-    models_url,
-    redact,
-    url_join,
 )
 from moodtag_core.response import normalize_analysis_json, parse_analysis_response
-from moodtag_core.taxonomy import (
-    flatten_taxonomy,
-    load_taxonomy,
-    reconcile_tags as core_reconcile_tags,
-    render_taxonomy_for_prompt,
-    reconcile_use_intents,
+
+from .config import (
+    ConfigError,
+    load_user_config,
+    public_config_view,
+    update_user_config,
 )
 
 DEFAULT_EAGLE_API = "http://localhost:41595"
@@ -142,9 +131,7 @@ def chat_completions_url(base_url: str) -> str:
     if path.endswith("/v1"):
         return url_join(base_url, "/chat/completions")
     if path in {"", "/"}:
-        v1_base = urllib.parse.urlunsplit(
-            (parts.scheme, parts.netloc, "/v1", "", "")
-        )
+        v1_base = urllib.parse.urlunsplit((parts.scheme, parts.netloc, "/v1", "", ""))
         return url_join(v1_base, "/chat/completions")
     return url_join(base_url, "/chat/completions")
 
@@ -160,9 +147,7 @@ def models_url(base_url: str) -> str:
     if path.endswith("/v1"):
         return url_join(base_url, "/models")
     if path in {"", "/"}:
-        v1_base = urllib.parse.urlunsplit(
-            (parts.scheme, parts.netloc, "/v1", "", "")
-        )
+        v1_base = urllib.parse.urlunsplit((parts.scheme, parts.netloc, "/v1", "", ""))
         return url_join(v1_base, "/models")
     return url_join(base_url, "/models")
 
@@ -286,7 +271,9 @@ def http_request(
             raw = resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise MoodtagError(f"HTTP {exc.code} from {url}: {redact(detail[:800])}") from exc
+        raise MoodtagError(
+            f"HTTP {exc.code} from {url}: {redact(detail[:800])}"
+        ) from exc
     except urllib.error.URLError as exc:
         raise MoodtagError(f"Cannot reach {url}: {exc.reason}") from exc
     if not raw:
@@ -302,12 +289,16 @@ class EagleClient:
         self.base_url = base_url.rstrip("/")
 
     def app_info(self) -> dict[str, Any]:
-        data = http_request("GET", url_join(self.base_url, "/api/v2/app/info"), timeout=5)
+        data = http_request(
+            "GET", url_join(self.base_url, "/api/v2/app/info"), timeout=5
+        )
         self._expect_success(data, "app info")
         return data["data"]
 
     def library_info(self) -> dict[str, Any]:
-        data = http_request("GET", url_join(self.base_url, "/api/library/info"), timeout=10)
+        data = http_request(
+            "GET", url_join(self.base_url, "/api/library/info"), timeout=10
+        )
         self._expect_success(data, "library info")
         return data["data"]
 
@@ -343,7 +334,12 @@ class EagleClient:
         visit(folders)
         if library_name:
             boards.extend(
-                Board(id=b.id, name=b.name, path=f"{library_name}/{b.path}", parent=b.parent)
+                Board(
+                    id=b.id,
+                    name=b.name,
+                    path=f"{library_name}/{b.path}",
+                    parent=b.parent,
+                )
                 for b in list(boards)
             )
         return boards
@@ -402,7 +398,9 @@ class EagleClient:
     @staticmethod
     def _expect_success(data: Any, label: str) -> None:
         if not isinstance(data, dict) or data.get("status") != "success":
-            raise MoodtagError(f"Eagle {label} failed: {redact(json.dumps(data)[:800])}")
+            raise MoodtagError(
+                f"Eagle {label} failed: {redact(json.dumps(data)[:800])}"
+            )
 
 
 def parse_item(raw: dict[str, Any]) -> EagleItem:
@@ -411,7 +409,9 @@ def parse_item(raw: dict[str, Any]) -> EagleItem:
         name=str(raw.get("name", "")).strip(),
         ext=str(raw.get("ext", "")).strip().lower().lstrip("."),
         tags=[str(tag) for tag in raw.get("tags", []) if str(tag).strip()],
-        folders=[str(folder) for folder in raw.get("folders", []) if str(folder).strip()],
+        folders=[
+            str(folder) for folder in raw.get("folders", []) if str(folder).strip()
+        ],
         annotation=str(raw.get("annotation", "") or ""),
         width=raw.get("width"),
         height=raw.get("height"),
@@ -491,9 +491,11 @@ def extract_notes_summary(annotation: str) -> str:
 
 
 def default_taxonomy_text() -> str:
-    return resources.files("moodtag_core.resources.taxonomy").joinpath(
-        "default.json"
-    ).read_text(encoding="utf-8")
+    return (
+        resources.files("moodtag_core.resources.taxonomy")
+        .joinpath("default.json")
+        .read_text(encoding="utf-8")
+    )
 
 
 def is_default_taxonomy_path(path: Path | str | None) -> bool:
@@ -583,12 +585,12 @@ def temporary_preview(source: Path, *, image_edge: int) -> Iterator[Preview]:
 def create_preview(source: Path, dest: Path, *, image_edge: int) -> Preview:
     try:
         return create_preview_with_pillow(source, dest, image_edge=image_edge)
-    except ImportError:
+    except ImportError as exc:
         if shutil.which("sips"):
             return create_preview_with_sips(source, dest, image_edge=image_edge)
         raise MoodtagError(
             "Image resizing requires Pillow. Install it with `python -m pip install Pillow`."
-        )
+        ) from exc
 
 
 def create_preview_with_pillow(source: Path, dest: Path, *, image_edge: int) -> Preview:
@@ -623,8 +625,7 @@ def create_preview_with_sips(source: Path, dest: Path, *, image_edge: int) -> Pr
         command,
         check=False,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     if proc.returncode != 0 or not dest.exists():
         raise MoodtagError(f"sips failed to create preview: {proc.stderr.strip()}")
@@ -636,8 +637,7 @@ def sips_dimensions(path: Path) -> tuple[int, int]:
         ["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(path)],
         check=False,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     if proc.returncode != 0:
         raise MoodtagError(f"sips cannot read image dimensions: {proc.stderr.strip()}")
@@ -679,11 +679,7 @@ class MockVisionClient:
         max_tags: int = DEFAULT_MAX_TAGS,
     ) -> MoodtagAnalysis:
         del image, retries
-        first_tags = [
-            tags[0]
-            for _, tags in list(taxonomy.items())[:3]
-            if tags
-        ]
+        first_tags = [tags[0] for _, tags in list(taxonomy.items())[:3] if tags]
         return normalize_analysis_json(
             {
                 "brief": "模拟角色站在简洁背景前，身穿测试服并佩戴基础道具。",
@@ -957,7 +953,9 @@ def format_palettes(palettes: list[dict[str, Any]]) -> str:
         if not (
             isinstance(color, list)
             and len(color) == 3
-            and all(isinstance(channel, int) and 0 <= channel <= 255 for channel in color)
+            and all(
+                isinstance(channel, int) and 0 <= channel <= 255 for channel in color
+            )
         ):
             continue
         ratio = format_palette_ratio(palette.get("ratio"))
@@ -967,7 +965,7 @@ def format_palettes(palettes: list[dict[str, Any]]) -> str:
 
 
 def format_palette_ratio(value: Any) -> str:
-    if not isinstance(value, (int, float)):
+    if not isinstance(value, int | float):
         return ""
     if float(value).is_integer():
         return f"{int(value)}%"
@@ -988,7 +986,9 @@ def export_source_paths(eagle: Any, items: list[EagleItem]) -> dict[str, Path]:
                 path = locate_original_in_info_dir(image_root / f"{item.id}.info", item)
         if path is None:
             with contextlib.suppress(Exception):
-                path = locate_original_from_thumbnail(eagle.thumbnail_path(item.id), item)
+                path = locate_original_from_thumbnail(
+                    eagle.thumbnail_path(item.id), item
+                )
         if path is not None:
             paths[item.id] = path
     return paths
@@ -1014,7 +1014,9 @@ def command_export_context(args: argparse.Namespace) -> int:
     board = resolve_board(args.board, eagle.boards())
     items = eagle.list_items(board.id)
     rows, _skipped_pending = context_rows(items, include_pending=args.include_pending)
-    source_paths = export_source_paths(eagle, [item for item, _fields, _complete in rows])
+    source_paths = export_source_paths(
+        eagle, [item for item, _fields, _complete in rows]
+    )
     markdown = build_context_markdown(
         board,
         items,
@@ -1186,7 +1188,9 @@ def command_config_show(args: argparse.Namespace) -> int:
     config = load_user_config()
     view = public_config_view(
         config,
-        api_key_set=bool(os.environ.get("MOODTAG_API_KEY") or os.environ.get("VL_API_KEY")),
+        api_key_set=bool(
+            os.environ.get("MOODTAG_API_KEY") or os.environ.get("VL_API_KEY")
+        ),
     )
     if args.json:
         print(json.dumps(view, ensure_ascii=False, sort_keys=True))
@@ -1226,7 +1230,9 @@ def build_parser() -> argparse.ArgumentParser:
     tag.add_argument("--mock-vl", action="store_true", help="Use deterministic mock VL")
     tag.add_argument(
         "--base-url",
-        default=config_value(user_config, "MOODTAG_BASE_URL", "base_url", DEFAULT_BASE_URL),
+        default=config_value(
+            user_config, "MOODTAG_BASE_URL", "base_url", DEFAULT_BASE_URL
+        ),
     )
     tag.add_argument(
         "--fallback-base-url",
@@ -1307,7 +1313,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     export.set_defaults(func=command_export_context)
 
-    reset = sub.add_parser("reset", help="Remove moodtag annotation fields from board items")
+    reset = sub.add_parser(
+        "reset", help="Remove moodtag annotation fields from board items"
+    )
     common(reset)
     reset.add_argument("--write", action="store_true")
     reset.set_defaults(func=command_reset)

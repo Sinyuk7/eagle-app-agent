@@ -23,7 +23,6 @@ from .contract import (
 from .prompts import read_system_prompt, render_user_prompt
 from .response import parse_analysis_response
 
-
 DEFAULT_USER_AGENT = "moodtag/0.1"
 
 
@@ -48,9 +47,7 @@ def chat_completions_url(base_url: str) -> str:
     if path.endswith("/v1"):
         return url_join(base_url, "/chat/completions")
     if path in {"", "/"}:
-        v1_base = urllib.parse.urlunsplit(
-            (parts.scheme, parts.netloc, "/v1", "", "")
-        )
+        v1_base = urllib.parse.urlunsplit((parts.scheme, parts.netloc, "/v1", "", ""))
         return url_join(v1_base, "/chat/completions")
     return url_join(base_url, "/chat/completions")
 
@@ -66,9 +63,7 @@ def models_url(base_url: str) -> str:
     if path.endswith("/v1"):
         return url_join(base_url, "/models")
     if path in {"", "/"}:
-        v1_base = urllib.parse.urlunsplit(
-            (parts.scheme, parts.netloc, "/v1", "", "")
-        )
+        v1_base = urllib.parse.urlunsplit((parts.scheme, parts.netloc, "/v1", "", ""))
         return url_join(v1_base, "/models")
     return url_join(base_url, "/models")
 
@@ -138,7 +133,9 @@ class VisionClient:
                 seen.add(url)
         return urls
 
-    def build_payload(self, image: Path, taxonomy: dict[str, list[str]]) -> dict[str, Any]:
+    def build_payload(
+        self, image: Path, taxonomy: dict[str, list[str]]
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.model,
             "temperature": self.temperature,

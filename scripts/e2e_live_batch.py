@@ -8,7 +8,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,7 +17,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import moodtag  # noqa: E402
-
 
 DEFAULT_BOARD = "明日方舟 - 小红书"
 DEFAULT_FIRST_LIMIT = 5
@@ -60,8 +58,7 @@ def run_moodtag(args: list[str], env: dict[str, str], *, label: str) -> RunResul
         cwd=ROOT,
         env=env,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
     stdout = redact(proc.stdout)
@@ -206,7 +203,9 @@ def write_report(payload: dict[str, Any], report_dir: Path) -> Path:
 def fail_with_report(payload: dict[str, Any], report_dir: Path) -> int:
     payload["passed"] = False
     report = write_report(payload, report_dir)
-    print(f"FAIL live_batch {payload.get('failure', 'unknown failure')}", file=sys.stderr)
+    print(
+        f"FAIL live_batch {payload.get('failure', 'unknown failure')}", file=sys.stderr
+    )
     print(f"Report: {report}", file=sys.stderr)
     return 1
 
@@ -230,7 +229,9 @@ def parse_args() -> argparse.Namespace:
             "MOODTAG_FALLBACK_BASE_URL", moodtag.DEFAULT_FALLBACK_BASE_URL
         ),
     )
-    parser.add_argument("--model", default=os.environ.get("MOODTAG_MODEL", DEFAULT_LIVE_MODEL))
+    parser.add_argument(
+        "--model", default=os.environ.get("MOODTAG_MODEL", DEFAULT_LIVE_MODEL)
+    )
     parser.add_argument("--discover-models", action="store_true")
     parser.add_argument(
         "--taxonomy",
@@ -246,7 +247,9 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=env_float("MOODTAG_TEMPERATURE", moodtag.DEFAULT_TEMPERATURE),
     )
-    parser.add_argument("--top-p", type=float, default=env_float("MOODTAG_TOP_P", moodtag.DEFAULT_TOP_P))
+    parser.add_argument(
+        "--top-p", type=float, default=env_float("MOODTAG_TOP_P", moodtag.DEFAULT_TOP_P)
+    )
     parser.add_argument(
         "--max-tokens",
         type=int,
@@ -339,7 +342,9 @@ def main() -> int:
             "MOODTAG_TEMPERATURE": str(args.temperature),
             "MOODTAG_TOP_P": str(args.top_p),
             "MOODTAG_MAX_TOKENS": str(args.max_tokens),
-            "MOODTAG_NO_RESPONSE_FORMAT": "true" if args.no_response_format else "false",
+            "MOODTAG_NO_RESPONSE_FORMAT": "true"
+            if args.no_response_format
+            else "false",
         }
     )
 
@@ -382,15 +387,17 @@ def main() -> int:
         return fail_with_report(payload, report_dir)
 
     if args.preflight_only:
-        payload.update({
-            "passed": True,
-            "preflight_only": True,
-            "preflight": preflight_result,
-            "states": {
-                "initial": initial,
-                "final": board_state(client, board),
-            },
-        })
+        payload.update(
+            {
+                "passed": True,
+                "preflight_only": True,
+                "preflight": preflight_result,
+                "states": {
+                    "initial": initial,
+                    "final": board_state(client, board),
+                },
+            }
+        )
         report = write_report(payload, report_dir)
         print(
             f"PASS live_preflight board={board.path} "
@@ -443,22 +450,24 @@ def main() -> int:
     if final["processed"] != initial["items"] or final["pending"] != 0:
         raise moodtag.MoodtagError(f"Final board state mismatch: {final}")
 
-    payload.update({
-        "passed": True,
-        "board": {"id": board.id, "path": board.path},
-        "base_url": args.base_url,
-        "fallback_base_url": args.fallback_base_url,
-        "model": model,
-        "models": models,
-        "preflight": preflight_result,
-        "states": {
-            "initial": initial,
-            "after_partial": after_partial,
-            "after_resume": after_resume,
-            "final": final,
-        },
-        "runs": [run.__dict__ for run in runs],
-    })
+    payload.update(
+        {
+            "passed": True,
+            "board": {"id": board.id, "path": board.path},
+            "base_url": args.base_url,
+            "fallback_base_url": args.fallback_base_url,
+            "model": model,
+            "models": models,
+            "preflight": preflight_result,
+            "states": {
+                "initial": initial,
+                "after_partial": after_partial,
+                "after_resume": after_resume,
+                "final": final,
+            },
+            "runs": [run.__dict__ for run in runs],
+        }
+    )
     report = write_report(payload, report_dir)
     print(f"PASS live_batch board={board.path} items={initial['items']} model={model}")
     print(
@@ -474,4 +483,4 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except moodtag.MoodtagError as exc:
         print(f"error: {redact(str(exc))}", file=sys.stderr)
-        raise SystemExit(1)
+        raise SystemExit(1) from exc

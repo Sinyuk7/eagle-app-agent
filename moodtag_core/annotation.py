@@ -6,7 +6,6 @@ import re
 
 from .contract import ANNOTATION_FIELDS, ANNOTATION_LABELS, MoodtagAnalysis
 
-
 ANNOTATION_LABEL_ORDER = [ANNOTATION_LABELS[field] for field in ANNOTATION_FIELDS]
 
 
@@ -38,7 +37,13 @@ def replace_analysis_annotation(existing: str, block: str) -> str:
     span = find_analysis_span(existing)
     if span:
         start, end = span
-        return (existing[:start].rstrip() + "\n\n" + block + "\n\n" + existing[end:].lstrip()).strip()
+        return (
+            existing[:start].rstrip()
+            + "\n\n"
+            + block
+            + "\n\n"
+            + existing[end:].lstrip()
+        ).strip()
     if existing.strip():
         return existing.rstrip() + "\n\n" + block
     return block
@@ -49,7 +54,9 @@ def remove_analysis_annotation(existing: str) -> str:
     if not span:
         return (existing or "").strip()
     start, end = span
-    return ((existing or "")[:start].rstrip() + "\n\n" + (existing or "")[end:].lstrip()).strip()
+    return (
+        (existing or "")[:start].rstrip() + "\n\n" + (existing or "")[end:].lstrip()
+    ).strip()
 
 
 def extract_brief(annotation: str) -> str:
@@ -79,7 +86,11 @@ def parse_annotation_fields(annotation: str) -> dict[str, str]:
 
 def find_analysis_span(annotation: str) -> tuple[int, int] | None:
     text = annotation or ""
-    matches = [match for match in label_matches(text) if match.group(1) in ANNOTATION_LABEL_ORDER]
+    matches = [
+        match
+        for match in label_matches(text)
+        if match.group(1) in ANNOTATION_LABEL_ORDER
+    ]
     if not matches:
         return None
     present = {match.group(1) for match in matches}

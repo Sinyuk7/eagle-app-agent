@@ -12,6 +12,13 @@ dependencies = [
   "Pillow>=10.0",
 ]
 
+[dependency-groups]
+dev = [
+  "pre-commit>=4.0",
+  "ruff>=0.11",
+  "twine>=6.0",
+]
+
 [project.scripts]
 moodtag = "moodtag.cli:main"
 
@@ -21,3 +28,12 @@ include = ["moodtag*", "moodtag_core*"]
 [tool.setuptools.package-data]
 "moodtag_core.resources.prompts" = ["*.txt"]
 "moodtag_core.resources.taxonomy" = ["*.json"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+extend-exclude = ["build", "dist", "*.egg-info"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]

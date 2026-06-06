@@ -1,7 +1,11 @@
-# Moodtag Handoff
+# Moodtag External CLI Contract
 
-This document is for external modules, upper-layer agents, or future skills that
-need to operate on Eagle folders through the public CLI only.
+This document is the strict integration contract for external modules,
+upper-layer agents, or future skills that need to operate on Eagle folders
+through the public CLI only.
+
+For human setup and everyday usage, read `README.md`. For source-level
+development and tests, read `CONTRIBUTING.md`.
 
 The boundary is strict:
 
