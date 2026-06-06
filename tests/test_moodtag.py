@@ -136,6 +136,57 @@ class MoodtagTests(unittest.TestCase):
         with self.assertRaisesRegex(moodtag.MoodtagError, "ambiguous"):
             moodtag.resolve_board("Shoot", boards)
 
+    def test_boards_use_folder_list_when_library_info_omits_folder(self):
+        responses = {
+            "http://localhost:41595/api/library/info": {
+                "status": "success",
+                "data": {
+                    "library": {"name": "My Library"},
+                    "folders": [
+                        {
+                            "id": "OTHER",
+                            "name": "Other",
+                            "children": [],
+                        }
+                    ],
+                },
+            },
+            "http://localhost:41595/api/folder/list": {
+                "status": "success",
+                "data": [
+                    {
+                        "id": "PARENT",
+                        "name": "策划",
+                        "parent": None,
+                        "children": [
+                            {
+                                "id": "MQ289V94I4U1A",
+                                "name": "美竹蘭",
+                                "parent": None,
+                                "children": [],
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+
+        def fake_http_request(method, url, **kwargs):
+            del method, kwargs
+            return responses[url]
+
+        with mock.patch.object(moodtag, "http_request", side_effect=fake_http_request):
+            boards = moodtag.EagleClient().boards()
+
+        self.assertEqual(
+            moodtag.resolve_board("MQ289V94I4U1A", boards).path,
+            "策划/美竹蘭",
+        )
+        self.assertEqual(
+            moodtag.resolve_board("策划/美竹蘭", boards).id,
+            "MQ289V94I4U1A",
+        )
+
     def test_replace_and_remove_notes_block(self):
         existing = (
             "Manual note\n\n"
