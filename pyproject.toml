@@ -21,13 +21,16 @@ dev = [
 
 [project.scripts]
 moodtag = "moodtag.cli:main"
+moodboard = "moodboard.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["moodtag*", "moodtag_core*"]
+include = ["moodtag*", "moodtag_core*", "moodboard*", "moodboard_core*"]
 
 [tool.setuptools.package-data]
 "moodtag_core.resources.prompts" = ["*.txt"]
 "moodtag_core.resources.taxonomy" = ["*.json"]
+"moodboard_core.resources.templates" = ["*.html"]
+"moodboard_core.resources.specs" = ["*.md"]
 
 [tool.ruff]
 line-length = 88

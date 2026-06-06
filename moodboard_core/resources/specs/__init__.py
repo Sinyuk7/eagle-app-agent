@@ -1,0 +1,1 @@
+"""Moodboard body design specifications."""

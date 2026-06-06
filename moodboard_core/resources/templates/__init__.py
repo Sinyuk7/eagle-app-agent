@@ -1,0 +1,1 @@
+"""Moodboard HTML shell templates."""
