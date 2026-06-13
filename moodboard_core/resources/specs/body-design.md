@@ -112,6 +112,37 @@ Image layout is part of the concept. Before placing images, define the layout
 system: component role, column count, row rhythm, tile aspect ratios, gaps, and
 semantic priority.
 
+For modules with several peer images, prefer the deterministic layout toolchain
+over hand-computing image dimensions in the body fragment. The toolchain is
+spec-only: it returns JSON image specs or geometry plans and must not decide the
+surrounding HTML component. The agent still owns the component role, reading
+order, semantic classes, captions, and final HTML.
+
+Use `moodboard layout catalog` only to prepare an Eagle folder as a reusable
+image pool; the folder itself is not the layout unit. A page module may select
+one, two, three, or any number of images from that pool. Use `moodboard layout inspect`
+when a module only needs source paths, intrinsic dimensions, aspect
+ratios, orientation, and safe `width`/`height` attributes. Use `moodboard layout
+plan` when a module needs deterministic geometry for a declared layout mode
+such as `justified`, `strip`, `stack`, or `grid`.
+
+Before calling `moodboard layout plan`, decide the module's visual role and pass
+that decision explicitly through the mode and parameters. Use `justified` only
+for equal-status reference walls or dense peer image groups that need exact row
+widths. Use `strip` for one-row detail bands, `stack` for vertical comparisons
+or sequence frames, and `grid` for fixed-track panels. Do not let the tool pick
+the concept or replace semantic HTML composition.
+
+For review-oriented moodboards with a sizable local reference pool, generally
+append a final Reference wall that previews all selected or supplied source
+images in one place. Treat this as an audit and comparison layer, not as the
+main concept narrative. Keep earlier sections selective and content-led, then
+use a final `moodboard layout plan --mode justified` pass over the complete
+review set so the viewer can scan coverage, duplicates, gaps, and outliers. The
+final wall may be omitted when the project has only a few images, when every
+source has already been shown clearly, or when the user explicitly wants a
+tighter board without an all-materials appendix.
+
 Use CSS Grid for primary image groups that need two-dimensional order. Grid
 tracks, gutters, and explicit spans make rows, columns, priority, and reading
 order auditable. Use Flexbox for one-dimensional strips. Do not use CSS columns

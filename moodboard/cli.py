@@ -7,6 +7,7 @@ from pathlib import Path
 
 from moodboard_core import body as body_core
 from moodboard_core import check as check_core
+from moodboard_core import layout as layout_core
 from moodboard_core import output as output_core
 from moodboard_core import project as project_core
 from moodboard_core import serve as serve_core
@@ -118,6 +119,10 @@ def command_serve(args: argparse.Namespace) -> int:
     return serve_core.main(argv)
 
 
+def command_layout(args: argparse.Namespace) -> int:
+    return layout_core.main(args.layout_args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="moodboard", description="Local moodboard HTML project runtime"
@@ -206,6 +211,12 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=0)
     serve.add_argument("--preflight-localhost", action="store_true")
     serve.set_defaults(func=command_serve)
+
+    layout = sub.add_parser(
+        "layout", help="Compute deterministic image specs and geometry plans"
+    )
+    layout.add_argument("layout_args", nargs=argparse.REMAINDER)
+    layout.set_defaults(func=command_layout)
 
     return parser
 

@@ -6,6 +6,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from moodboard import cli as moodboard
+from moodboard_core import layout as layout_core
 
 
 def run_cli(*args, input_text=None):
@@ -40,6 +41,10 @@ class MoodboardCliTests(unittest.TestCase):
         self.assertIn(
             "Generate only an HTML body fragment", by_name["body-design.md"]["content"]
         )
+        self.assertIn("moodboard layout plan", by_name["body-design.md"]["content"])
+        self.assertIn("moodboard layout inspect", by_name["body-design.md"]["content"])
+        self.assertIn("not the layout unit", by_name["body-design.md"]["content"])
+        self.assertIn("final Reference wall", by_name["body-design.md"]["content"])
 
         code, output = run_cli("resources", "get", "starter.html", "--json")
         self.assertEqual(code, 2)
@@ -254,6 +259,173 @@ class MoodboardCliTests(unittest.TestCase):
             self.assertEqual(payload["error"], "localhost_preflight_failed")
             self.assertIn("localhost_unsafe_assets", payload["check"])
             self.assertTrue(payload["check"]["localhost_unsafe_assets"])
+
+    def test_layout_plan_handles_arbitrary_module_subsets(self):
+        items = [
+            {"id": "A", "src": "a.jpg", "width": 1600, "height": 1000},
+            {"id": "B", "src": "b.jpg", "width": 800, "height": 1200},
+            {"id": "C", "src": "c.jpg", "width": 1000, "height": 1000},
+            {"id": "D", "src": "d.jpg", "width": 1800, "height": 1000},
+            {"id": "E", "src": "e.jpg", "width": 900, "height": 1200},
+        ]
+        for count in (1, 2, 3, 5):
+            plan = layout_core.plan_justified(
+                [
+                    layout_core.item_from_dict(item, index)
+                    for index, item in enumerate(items[:count])
+                ],
+                container_width=900,
+                target_row_height=220,
+                gap=10,
+            )
+            self.assertEqual(plan["kind"], "geometry-plan")
+            self.assertFalse(plan["html_output"])
+            self.assertEqual(plan["metrics"]["item_count"], count)
+            self.assertEqual(len(plan["boxes"]), count)
+            self.assertFalse(plan["metrics"]["horizontal_overflow"])
+            for row in plan["rows"]:
+                if row["justified"]:
+                    self.assertAlmostEqual(row["width"], 900, delta=0.6)
+
+    def test_layout_cli_inspect_and_plan_subset_specs_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            catalog = Path(tmp) / "catalog.json"
+            specs_path = Path(tmp) / "specs.json"
+            plan_path = Path(tmp) / "plan.json"
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "id": "A",
+                                "src": "a.jpg",
+                                "width": 1200,
+                                "height": 800,
+                                "caption": "wide",
+                            },
+                            {
+                                "id": "B",
+                                "src": "b.jpg",
+                                "width": 800,
+                                "height": 1200,
+                                "caption": "tall",
+                            },
+                            {
+                                "id": "C",
+                                "src": "c.jpg",
+                                "width": 1000,
+                                "height": 1000,
+                                "caption": "square",
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            code, output = run_cli(
+                "layout",
+                "inspect",
+                "--input",
+                str(catalog),
+                "--ids",
+                "C,A",
+                "--output",
+                str(specs_path),
+            )
+            self.assertEqual(code, 0, output)
+            specs = json.loads(specs_path.read_text(encoding="utf-8"))
+            self.assertEqual(specs["kind"], "image-specs")
+            self.assertFalse(specs["html_output"])
+            self.assertEqual([item["id"] for item in specs["items"]], ["C", "A"])
+            self.assertEqual(specs["items"][0]["width_attr"], 1000)
+            self.assertEqual(specs["items"][0]["css_aspect_ratio"], "1000 / 1000")
+
+            code, output = run_cli(
+                "layout",
+                "plan",
+                "--input",
+                str(catalog),
+                "--ids",
+                "C,A",
+                "--mode",
+                "justified",
+                "--container-width",
+                "720",
+                "--target-row-height",
+                "220",
+                "--output",
+                str(plan_path),
+            )
+            self.assertEqual(code, 0, output)
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            self.assertEqual(plan["kind"], "geometry-plan")
+            self.assertFalse(plan["html_output"])
+            self.assertEqual(plan["mode"], "justified")
+            self.assertEqual([box["id"] for box in plan["boxes"]], ["C", "A"])
+
+    def test_layout_cli_explicit_modes_return_geometry_specs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            catalog = Path(tmp) / "catalog.json"
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "items": [
+                            {"id": "A", "src": "a.jpg", "width": 1200, "height": 800},
+                            {"id": "B", "src": "b.jpg", "width": 800, "height": 1200},
+                            {"id": "C", "src": "c.jpg", "width": 1000, "height": 1000},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            code, output = run_cli(
+                "layout",
+                "plan",
+                "--input",
+                str(catalog),
+                "--mode",
+                "grid",
+                "--columns",
+                "2",
+                "--cell-aspect-ratio",
+                "4:3",
+                "--container-width",
+                "800",
+            )
+            self.assertEqual(code, 0, output)
+            grid = json_stdout(output)
+            self.assertEqual(grid["mode"], "grid")
+            self.assertEqual(grid["columns"], 2)
+            self.assertEqual(grid["boxes"][1]["column"], 1)
+            self.assertFalse(grid["html_output"])
+
+            code, output = run_cli(
+                "layout",
+                "plan",
+                "--input",
+                str(catalog),
+                "--mode",
+                "stack",
+                "--container-width",
+                "600",
+            )
+            self.assertEqual(code, 0, output)
+            stack = json_stdout(output)
+            self.assertEqual(stack["mode"], "stack")
+            self.assertEqual(stack["metrics"]["row_count"], 3)
+            self.assertFalse(stack["metrics"]["horizontal_overflow"])
+
+    def test_layout_preserves_source_path_spacing(self):
+        item = layout_core.item_from_dict(
+            {
+                "id": "A",
+                "src": "/tmp/name  with   spaces.jpg",
+                "width": 100,
+                "height": 100,
+            },
+            0,
+        )
+        self.assertEqual(item.src, "/tmp/name  with   spaces.jpg")
 
 
 if __name__ == "__main__":

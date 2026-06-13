@@ -44,6 +44,7 @@ dev = [
 [project.scripts]
 moodtag = "moodtag.cli:main"
 moodboard = "moodboard.cli:main"
+moodboard-layout = "moodboard_core.layout:main"
 
 [tool.setuptools.packages.find]
 include = ["moodtag*", "moodtag_core*", "moodboard*", "moodboard_core*"]

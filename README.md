@@ -78,6 +78,20 @@ moodtag tag --board 'MQBUH98ILYTQ0' --write --concurrency 4
 moodtag export-context --board 'MQBUH98ILYTQ0' --output context.md
 ```
 
+为 HTML moodboard 模块准备图片规格或几何计划：
+
+```sh
+moodboard layout catalog --folder 'http://localhost:41595/folder?id=MQBUH98ILYTQ0' --output catalog.json
+moodboard layout inspect --input catalog.json --ids ITEM_ID_A ITEM_ID_B --output image-specs.json
+moodboard layout plan --input catalog.json --ids ITEM_ID_A ITEM_ID_B ITEM_ID_C --mode justified --output layout.json
+```
+
+`catalog` 只把 Eagle 文件夹准备成素材池；网页里的某个模块可以用 `--ids`
+从素材池里选择 1 张、2 张、3 张或任意张图片。`inspect` 只输出图片
+src、原始宽高、比例和可写入 `<img>` 的 `width` / `height` 规格；`plan`
+只输出几何 JSON。正文 HTML 结构、横排/竖排/对照/序列/图片墙等语义选择仍由
+agent 编写，文件夹 URL 不是布局单位。
+
 ## 必要信息
 
 `moodtag tag` 默认是 dry run，不会修改 Eagle。只有加上 `--write` 才会写入。
