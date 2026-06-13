@@ -66,6 +66,12 @@ moodtag tag --board 'MQBUH98ILYTQ0'
 moodtag tag --board 'MQBUH98ILYTQ0' --write
 ```
 
+并发处理图片分析：
+
+```sh
+moodtag tag --board 'MQBUH98ILYTQ0' --write --concurrency 4
+```
+
 导出文件夹上下文为 Markdown：
 
 ```sh
@@ -77,6 +83,8 @@ moodtag export-context --board 'MQBUH98ILYTQ0' --output context.md
 `moodtag tag` 默认是 dry run，不会修改 Eagle。只有加上 `--write` 才会写入。
 
 `moodtag tag --write` 会覆盖被处理图片的 Eagle `tags` 和 `annotation`，不会和原有元数据合并。
+
+默认发送给模型的预览图长边是 `768px`。需要更高细节时可以传 `--image-edge 1024`。
 
 只处理一小批图片：
 
