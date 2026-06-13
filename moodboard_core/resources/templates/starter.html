@@ -13,6 +13,7 @@
     - create_project.py renders PROJECT_* placeholders only when the project is first created.
     - Future skill runs replace only the body element contents.
     - The document head is a stable technical shell; project-specific visual design belongs in body.
+    - This starter provides reset/base/utility primitives only, not moodboard page patterns.
   -->
   <style>
     @layer reset, base, utilities, theme, components;
@@ -221,6 +222,10 @@
         object-fit: cover;
       }
 
+      :where(.media-box.media-contain > img, .media-box.media-contain > video, img.media-contain, video.media-contain) {
+        object-fit: contain;
+      }
+
       :where(.media-fluid) {
         width: 100%;
         height: auto;
@@ -284,6 +289,23 @@
 
       :where(.snap-row > *) {
         scroll-snap-align: start;
+      }
+
+      :where(.container-query) {
+        container-type: inline-size;
+      }
+
+      :where(.visually-hidden) {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        clip-path: inset(50%);
+        white-space: nowrap;
+        border: 0;
       }
 
       :where(.avoid-break) {

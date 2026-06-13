@@ -12,24 +12,29 @@ shell code. The CLI owns the document shell and inserts this fragment into
 This body-spec governs how creative material becomes a webpage UI and visual
 planning interface. It does not decide the creative direction. The reasoning
 step decides whether a project is rainy, neon, lonely, romantic, harsh, soft,
-or any other aesthetic direction.
+bright, documentary, synthetic, restrained, maximal, or any other aesthetic
+direction.
 
-The spec may require visual forms for known structures: mood contrast becomes a
-mood axis, contrast map, or paired comparison; palette weights become
-proportional swatches; sequence or shot rhythm becomes a time lane or ordered
-frame system; image sets become grids, walls, strips, comparisons, or sequence
-frames according to role.
+The spec is a hard delivery contract plus a set of design judgement principles.
+It must not become a fixed component menu, page archetype list, section order,
+or house style. The agent owns the page structure.
 
-Output Boundary
----------------
+Hard Contract
+-------------
 
 Return body-only HTML that can be injected into an existing document.
 
 Allowed: one first-level `<style data-moodboard-theme>` block; semantic body
 content such as `<main>`, `<section>`, `<article>`, `<figure>`,
-`<figcaption>`, `<aside>`, `<blockquote>`, `<ol>`, `<ul>`, and tables only
-when tabular comparison is clearest; project-relative image paths, local
-absolute paths, `file://` URIs, or remote URLs in `<img src>`.
+`<figcaption>`, `<aside>`, `<blockquote>`, `<ol>`, `<ul>`, and tables only when
+tabular comparison is clearest; project-relative image paths, local absolute
+paths, `file://` URIs, or remote URLs in `<img src>`.
+
+Required: visible core content without JavaScript; useful `alt` text for
+meaningful images; no empty image sources; no duplicate IDs; stable media
+geometry before images load; readable heading order; text that wraps without
+overlap; responsive behavior on phone, tablet, and desktop; no hidden primary
+idea; no broken local assets or fragment links after `moodboard output write`.
 
 Disallowed: full-document tags, metadata, viewport tags, document-head edits,
 external JavaScript, script-dependent interaction, autoplaying carousels, hidden
@@ -39,78 +44,122 @@ taxonomies, and long logistics unless they directly change visual execution.
 Page Role
 ---------
 
-Design a long-scroll visual planning page for photography, editorial portraits,
+Design a visual planning page for photography, editorial portraits,
 cosplay/IP-inspired shoots, storyboards, visual concept development, and
 creative exploration.
 
-The page should feel like a visual planning interface or digital editorial
-board, not a Markdown note, landing page, static checklist, gallery dump, or
-documentation site. It should help viewers understand how to look, shoot,
-compose, pace, color, style, and sequence the project.
+The page should feel like a visual planning interface, digital editorial board,
+or art-directed local web document. It should help viewers understand how to
+look, shoot, compose, pace, color, style, sequence, and edit the project.
 
 Center the page on images, mood, lens language, framing, rhythm, pose,
 movement, color, styling, motifs, details, main images, pause images,
 close-ups, and sequence flow. Mention gear, logistics, budget, or operations
 only when they directly affect the image.
 
-Design Principles
+Design Judgement
+----------------
+
+Build the page from the project's strongest visual problem. Do not start from a
+default section list.
+
+Use the material to decide:
+
+- what the first impression must be;
+- what should be compared, sequenced, isolated, repeated, enlarged, compressed,
+  annotated, or left quiet;
+- which visual ideas deserve images and which deserve type, diagrams, lists, or
+  negative space;
+- whether the page should feel dense, spacious, clinical, cinematic, fragmented,
+  archival, intimate, operational, lyrical, or severe;
+- which parts should be stable planning information and which parts should be
+  expressive visual direction.
+
+Design principles should help resolve tradeoffs, not prescribe widgets. A page
+can be strong with no color-module, no timeline, no cards, no hero split, no
+shot map, or no named component if the project does not call for those forms.
+
+Design Dimensions
 -----------------
 
-Use editorial flow instead of identical cards. Each major section must have a
-clear visual task: establish tone, compare moods, show references, translate
-references into execution, break down color, map movement, pace a sequence, or
-close with a distilled direction.
+Treat the following as dimensions to evaluate, not a checklist to render. Use
+only the dimensions supported by the project material, and invent the page
+structure that best expresses them.
 
-Choose structure from the project material rather than a fixed heading set.
-Valid structures include anchor images, mood clusters, pose studies, lens
-language, color scripts, styling cues, motif studies, sequence rhythm, contrast
-maps, and reference essays.
+- Visual narrative: how the set opens, turns, pauses, escalates, or resolves.
+- Sequence, time, and rhythm: shoot order, emotional progression, scene order,
+  frame pacing, or edit rhythm.
+- Anchor image and first impression: the dominant image, color, gesture,
+  surface, phrase, or spatial relationship the viewer must understand first.
+- Tone and palette: color weight, contrast, temperature, saturation, surface,
+  skin treatment, accent behavior, and how the page itself should echo the shoot
+  without becoming a one-note palette.
+- Lens language and framing: distance, crop, angle, compression, distortion,
+  foreground/background relationship, negative space, and gaze direction.
+- Spatial relationship and scale: body versus location, prop versus face,
+  architecture versus figure, crowding versus isolation.
+- Pose, gesture, and movement: stance, hand language, stillness, transition,
+  repeated action, choreography, or physical tension.
+- Detail and motif systems: makeup, hair, fabric, prop, accessory, texture,
+  symbol, light fragment, local color, or recurring shape.
+- Contrast and boundary: what to emphasize, what to suppress, what a reference
+  contributes, and what must not be copied.
+- Evidence and reference coverage: which source images carry the argument,
+  which are supporting evidence, and where the set has gaps, duplicates, or
+  outliers.
+- Final reference audit layer: when the source pool is sizable, include an end
+  layer that lets the viewer scan supplied or selected references for coverage,
+  repetition, gaps, and outliers.
 
-Substantial pages should combine at least two or three rhythms: large image
-impact, dense reference reading, quiet prose, compact comparison cards, axis
-diagrams, color strips, sequence lanes, or shot maps.
+Optional Strategies, Not Templates
+----------------------------------
 
-Cards are for short peer-level comparisons. Use prose, pull quotes, image-led
-sections, or diagrams for long aesthetic reasoning. Avoid making every section
-`title + paragraph + three cards`.
+The agent may use any structure, layout, class names, or local visual language
+that satisfies the hard contract and fits the project. The examples below are
+strategy prompts, not required components:
 
-Visual hierarchy must be obvious on phone, tablet, and desktop: large anchors
-for primary ideas, medium panels for supporting clusters, compact elements for
-labels, notes, and metadata.
+- large scale shifts for hierarchy;
+- image-led openings, dense contact sheets, quiet text passages, or graphic
+  interludes;
+- editorial grids, asymmetric layouts, spatial maps, annotated evidence, or
+  controlled negative space;
+- sequence lanes, frame strips, crop studies, pose studies, motif extraction,
+  light maps, palette-as-structure, or comparison diagrams;
+- type used as pace, silence, instruction, warning, or summary rather than
+  ordinary decoration;
+- repeated visual evidence grouped by role instead of by file order;
+- responsive art direction through crop, scale, image priority, and layout
+  rhythm, not only through resizing.
 
-Component Grammar
------------------
+Do not treat those examples as a menu to exhaust. A page with two highly
+resolved visual moves is better than a page that mechanically includes every
+possible module.
 
-Choose components by content role, not template habit:
+Anti-template Review
+--------------------
 
-- Hero or title sequence: one dominant premise, anchor image, title, or opening
-  mood.
-- Rhythm grid: three to six references with clear priority. Mark items with
-  semantic classes such as `is-lead`, `is-wide`, `is-tall`, `is-quiet`, or
-  `is-accent`.
-- Reference wall: many equal-status references scanned together, with compact
-  transferable captions.
-- Detail strip: makeup, hair, fabric, props, gestures, hands, accessories,
-  light fragments, surface texture, or local color.
-- Mood axis or contrast map: content-derived emotional poles or opposing visual
-  treatments.
-- Proportional swatches: known or inferred palette weights. Simple swatch rows
-  are enough when percentages are unreliable.
-- Time lane: time, narrative order, shoot sequence, emotional progression,
-  scene order, or shot rhythm.
-- Shot map: executable frames describing crop, action, distance, lens language,
-  light direction, pose, movement, or foreground/background relationships.
-- Bento or mixed grid: mixed media with clear relative importance. Do not nest
-  cards.
-- Pull quote or large type: concise creative principle only, not ordinary body
-  copy or panel headings.
+Before returning the body fragment, check for template drift:
+
+- If the page still reads as a generic moodboard after replacing the project
+  nouns, redesign the structure.
+- If the page defaults to `title + paragraph + three cards` in every section,
+  redesign the rhythm.
+- If the page repeats the same component order used for a previous unrelated
+  project, justify the repetition from the current material or change it.
+- If every image receives equal scale despite clear differences in importance,
+  redesign the hierarchy.
+- If color, timeline, shot map, or mood comparison appears only because the spec
+  mentioned it, remove or transform it.
+- If class names or headings come from habit rather than the page's own logic,
+  rename and restructure them.
 
 Grid And Image Layout
 ---------------------
 
 Image layout is part of the concept. Before placing images, define the layout
-system: component role, column count, row rhythm, tile aspect ratios, gaps, and
-semantic priority.
+system from the current material: visual role, image priority, reading order,
+column or row rhythm, aspect ratio behavior, gaps, captions, and what should
+remain uncropped.
 
 For modules with several peer images, prefer the deterministic layout toolchain
 over hand-computing image dimensions in the body fragment. The toolchain is
@@ -120,39 +169,41 @@ order, semantic classes, captions, and final HTML.
 
 Use `moodboard layout catalog` only to prepare an Eagle folder as a reusable
 image pool; the folder itself is not the layout unit. A page module may select
-one, two, three, or any number of images from that pool. Use `moodboard layout inspect`
-when a module only needs source paths, intrinsic dimensions, aspect
-ratios, orientation, and safe `width`/`height` attributes. Use `moodboard layout
-plan` when a module needs deterministic geometry for a declared layout mode
-such as `justified`, `strip`, `stack`, or `grid`.
+one, two, three, or any number of images from that pool. Use
+`moodboard layout inspect` when a module only needs source paths, intrinsic
+dimensions, aspect ratios, orientation, and safe `width`/`height` attributes.
+Use `moodboard layout plan` when a module needs deterministic geometry for a
+declared layout mode such as `justified`, `strip`, `stack`, or `grid`.
 
 Before calling `moodboard layout plan`, decide the module's visual role and pass
 that decision explicitly through the mode and parameters. Use `justified` only
-for equal-status reference walls or dense peer image groups that need exact row
-widths. Use `strip` for one-row detail bands, `stack` for vertical comparisons
-or sequence frames, and `grid` for fixed-track panels. Do not let the tool pick
-the concept or replace semantic HTML composition.
+for equal-status reference groups, contact sheets, archive walls, or dense peer
+image sets that need exact row widths. Use `strip` for one-row detail bands,
+`stack` for vertical comparisons or sequence frames, and `grid` for fixed-track
+panels. Do not let the tool pick the concept or replace semantic HTML
+composition.
 
 For review-oriented moodboards with a sizable local reference pool, generally
-append a final Reference wall that previews all selected or supplied source
-images in one place. Treat this as an audit and comparison layer, not as the
-main concept narrative. Keep earlier sections selective and content-led, then
-use a final `moodboard layout plan --mode justified` pass over the complete
-review set so the viewer can scan coverage, duplicates, gaps, and outliers. The
-final wall may be omitted when the project has only a few images, when every
-source has already been shown clearly, or when the user explicitly wants a
-tighter board without an all-materials appendix.
+append a final reference audit layer that previews all selected or supplied
+source images in one place. A final Reference wall is an acceptable and expected
+form when it fits, but the audit layer may also become a contact sheet, archive
+shelf, film strip, evidence index, or grouped reference ledger. Treat this as an
+audit and comparison layer, not as the main concept narrative. Keep earlier
+sections selective and content-led, then use a final `moodboard layout plan`
+pass, often `--mode justified`, over the complete review set when exact rows
+help the viewer scan coverage, duplicates, gaps, and outliers.
 
 Use CSS Grid for primary image groups that need two-dimensional order. Grid
 tracks, gutters, and explicit spans make rows, columns, priority, and reading
 order auditable. Use Flexbox for one-dimensional strips. Do not use CSS columns
 or masonry-style flows for primary concept, sequence, or rhythm sections.
 
-Every primary image group must resolve into an intentional rectangle or clean
-band. Avoid ragged right edges, accidental holes, orphan tiles, and uneven
-bottom edges unless the asymmetry is deliberate and content-led. Close uneven
-counts with a lead tile, wide tile, text note, palette module, or controlled
-negative-space panel.
+Every primary image group must resolve into an intentional rectangle, clean
+band, deliberate stack, or clearly authored asymmetry. Avoid ragged right edges,
+accidental holes, orphan tiles, and uneven bottom edges unless the asymmetry is
+content-led. Close uneven counts with a lead tile, wide tile, text note, palette
+module, diagram, or controlled negative-space panel only when that helps the
+concept.
 
 Set stable media geometry before images load: use explicit `aspect-ratio`
 values or grid row spans; include `width` and `height` when known; constrain
@@ -161,19 +212,10 @@ media with `max-inline-size: 100%` and `block-size: auto`; use
 only when the full reference must remain visible; set `object-position` when
 faces, hands, props, or composition lines must not be cropped accidentally.
 
-Use named layout roles instead of `:nth-child()` placement. Mark which image is
-lead, wide, tall, quiet, accent, pause, detail, or climax, then map those roles
-to grid spans and aspect ratios.
-
-Keep repeated grids coherent: one gap scale per component; a limited aspect
-ratio set such as `16 / 9`, `4 / 3`, `3 / 4`, `1 / 1`, or `2 / 3`; no random
-mix of unrelated proportions; captions that do not unpredictably resize tiles;
-compact text placed in a fixed caption area, overlay band, or note column.
-
-Masonry is allowed only as a secondary reference wall when abundance is the
-point, items are equal-status, reading order is not semantic, and the fallback
-still looks coherent. Do not rely on experimental native masonry as the default
-layout.
+Use named layout roles instead of `:nth-child()` placement when individual image
+priority matters. Roles may be invented for the project: lead, witness, pause,
+trace, signal, obstruction, detail, false-friend, climax, or any other semantic
+role that explains the layout.
 
 Image Use
 ---------
@@ -181,26 +223,22 @@ Image Use
 Use `<img>` for visual references. Every meaningful image needs useful `alt`
 text, and decorative overlays must not replace the underlying alt text.
 
-Choose layouts by role: hero image for one dominant first impression; rhythm
-grid for deliberate scale differences; reference wall for peer comparison;
-detail strip for close-up evidence; paired comparison for contrast; sequence
-frames for progression or shot rhythm.
-
-Use `<figure>` and `<figcaption>` when interpretation is needed. Captions
-should say what is borrowed, how it transfers, and what to watch during
-execution, not merely describe appearance. Avoid vague captions such as
-`nice mood`, `cinematic`, `beautiful reference`, or `good lighting`.
+Use `<figure>` and `<figcaption>` when interpretation is needed. Captions should
+say what is borrowed, how it transfers, and what to watch during execution, not
+merely describe appearance. Avoid vague captions such as `nice mood`,
+`cinematic`, `beautiful reference`, or `good lighting`.
 
 When references vary by source, use subtle scoped treatment such as shared
-borders, restrained filters, overlays, or consistent frame geometry. Do not
-filter so strongly that references become misleading.
+borders, restrained filters, overlays, grouping, or consistent frame geometry.
+Do not filter so strongly that references become misleading.
 
-Color Expression
-----------------
+Color, Tone, And Surface
+------------------------
 
-Color UI must behave like a planning tool. Use proportional swatches when
-palette ratios are known or inferred; otherwise label relative weight such as
-`dominant`, `support`, `skin/highlight`, and `accent`.
+Color UI must behave like a planning tool and a page atmosphere at the same
+time. Use proportional swatches only when palette ratios are known or genuinely
+useful. Otherwise express color through section backgrounds, image grouping,
+linework, labels, scale, or local tokens.
 
 Each key color should carry a semantic role and practical use, such as
 `background shadow`, `skin warmth`, `signal accent`, `metal highlight`,
@@ -209,40 +247,47 @@ Each key color should carry a semantic role and practical use, such as
 Where useful, map the palette to local CSS variables so the interface and shoot
 palette feel connected. Keep the mapping scoped to the generated body.
 
+Avoid one-note UI palettes even when respecting the project's palette. Dark
+pages need clear layer separation through surface levels, section background
+shifts, line strength, captions, and accent rules. Light pages need contrast,
+controlled surfaces, strong image rhythm, subtle lines, and clear type
+hierarchy.
+
 Sequence, Mood, And Contrast
 ----------------------------
 
 When content includes a beginning, middle, ending, transformation, scene order,
-time of day, or shot progression, express it visually rather than as a plain
-list.
+time of day, or shot progression, express the order visually rather than as a
+plain list. The form can be linear, circular, staggered, nested, cinematic,
+map-like, or editorial as long as order is readable.
 
-A time lane should make order visible through position, numbering, linework,
-spacing, or alternating panels. A shot rhythm section should vary wide, medium,
-close, detail, pause, transition, and climax frames when supported.
+When content contains emotional opposition, make the tension spatially visible
+through contrast, distance, scale, color, density, image pairing, type
+treatment, or diagrammatic structure. Do not force a formal axis if another
+structure communicates the opposition better.
 
-When content contains emotional opposition, build a mood axis, contrast map,
-paired comparison, or gradient section that makes the tension spatially
-visible. Axis labels, poles, placements, and notes must come from the creative
-reasoning already available for the project.
+When the project needs executable shot planning, describe crop, distance, light
+direction, pose, movement, foreground/background relationship, and edit role.
+Do not let shot planning consume the whole page when mood, reference evidence,
+or visual narrative is more important.
 
 Layout Language
 ---------------
 
-Use semantic reusable class names that describe component role, not project
-identity. Prefer `.moodboard-canvas`, `.section-shell`, `.hero-sequence`,
-`.rhythm-grid`, `.reference-wall`, `.detail-strip`, `.time-lane`, `.mood-axis`,
-`.shot-map`, `.color-script`, `.palette-band`, `.signal-card`,
-`.section-kicker`, and `.caption-note`.
+Use semantic reusable class names that describe role, behavior, or local page
+logic. Names may be project-specific when they clarify a unique visual argument.
+Generic utility opt-ins from the shell, such as `.moodboard-page`,
+`.moodboard-canvas`, `.shell`, `.grid`, `.cluster`, `.media-box`, `.swatch-row`,
+and `.snap-row`, are available but never required.
 
-Avoid project-specific class names unless identity truly needs a one-off hook.
-Use stable dimensions for image boxes, strips, grids, tiles, counters, labels,
-and compact panels. Do not place cards inside cards. Page sections should be
-full-width bands or unframed layouts with constrained inner content. Cards are
-acceptable for repeated items, compact comparisons, shot cards, reference
-items, and modal-like framed tools.
+Do not place cards inside cards. Page sections should be full-width bands or
+unframed layouts with constrained inner content. Cards are acceptable for
+repeated items, compact comparisons, shot cards, reference items, and
+modal-like framed tools when those forms are truly appropriate.
 
-Horizontal scroll is acceptable only for peer references or detail strips. Do
-not hide the primary idea, sequence, or final direction inside a carousel.
+Horizontal scroll is acceptable only for peer references, detail strips, contact
+surfaces, or deliberately compact evidence. Do not hide the primary idea,
+sequence, or final direction inside a carousel.
 
 Responsive Behavior
 -------------------
@@ -263,14 +308,8 @@ Ensure text fits inside buttons, labels, cards, captions, and panels. Long
 words or names should wrap gracefully. Text must not overlap images or adjacent
 UI.
 
-Themes, Accessibility, And Robustness
--------------------------------------
-
-Dark pages need clear layer separation through surface levels, section
-background shifts, line strength, captions, and accent rules. Light pages need
-contrast, controlled surfaces, strong image rhythm, subtle lines, and clear
-type hierarchy. Avoid one-note UI palettes even when respecting the project's
-palette.
+Accessibility And Robustness
+----------------------------
 
 Use logical heading order, real text for labels and notes, and useful `alt`
 text for meaningful images. Decorative images may use empty alt text, but
@@ -292,30 +331,21 @@ If a style block is included, put it near the top of the fragment:
 ```
 
 Scope the style block to generated body classes. It may define local tokens for
-color, spacing, radius, type, shadows, surfaces, and aspect ratios, but must
-not depend on editing the document head. Use CSS layers only when they keep the
+color, spacing, radius, type, shadows, surfaces, and aspect ratios, but must not
+depend on editing the document head. Use CSS layers only when they keep the
 style block clearer.
-
-Minimal Body Shape
-------------------
-
-There is no required section list, but a strong body normally has a root
-`<main>` with a stable class such as `.moodboard-canvas` or `.moodboard-page`,
-a first visual anchor, sections that translate references into visual
-decisions, image-led evidence where available, and a readable closing or
-synthesis when useful.
-
-The exact sections, labels, and components must come from the project material.
 
 Quality Bar
 -----------
 
 Before returning the body fragment, check that it is body-only HTML; core
 content is visible without JavaScript; the page is a visual planning interface;
-component choices match content structure; primary image layouts form complete
-rectangles or clean bands; image frames have stable aspect ratios, dimensions,
-or grid tracks; images have useful alt text and interpretive captions where
-needed; palette, sequence, mood, and shot components appear only when
-supported; class names are semantic and reusable; text does not overlap images
-or adjacent UI; and layout remains readable across phone, tablet, desktop, and
-reasonable PDF export.
+the structure comes from the current project rather than a repeated template;
+important design dimensions are expressed intentionally and unsupported
+dimensions are omitted; primary image layouts form complete rectangles, clean
+bands, authored stacks, or deliberate asymmetry; image frames have stable aspect
+ratios, dimensions, or grid tracks; images have useful alt text and
+interpretive captions where needed; the final reference audit layer appears
+when the source set is large enough to benefit from coverage review; class names
+are semantic; text does not overlap images or adjacent UI; and layout remains
+readable across phone, tablet, desktop, and reasonable PDF export.

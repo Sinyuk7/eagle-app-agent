@@ -92,6 +92,18 @@ src、原始宽高、比例和可写入 `<img>` 的 `width` / `height` 规格；
 只输出几何 JSON。正文 HTML 结构、横排/竖排/对照/序列/图片墙等语义选择仍由
 agent 编写，文件夹 URL 不是布局单位。
 
+读取 HTML body 设计合同：
+
+```sh
+moodboard resources get body-design.md --json
+```
+
+`body-design.md` 只把 body-only、可访问性、图片资产、无脚本依赖和响应式稳定作为硬合同。
+视觉表达部分是设计维度和反模板检查，不是固定组件清单；视觉叙事、时间线、主视觉、色调、
+调色板、镜头语言、动作、空间关系、细节和对比都应按项目材料决定是否出现。素材池较大时，
+末尾应保留 final reference audit layer，用来检查参考覆盖、重复、缺口和异常素材；它可以是
+Reference wall，也可以是 contact sheet、archive shelf、film strip 或其他适合当前页面的形态。
+
 ## 必要信息
 
 `moodtag tag` 默认是 dry run，不会修改 Eagle。只有加上 `--write` 才会写入。

@@ -44,7 +44,15 @@ class MoodboardCliTests(unittest.TestCase):
         self.assertIn("moodboard layout plan", by_name["body-design.md"]["content"])
         self.assertIn("moodboard layout inspect", by_name["body-design.md"]["content"])
         self.assertIn("not the layout unit", by_name["body-design.md"]["content"])
-        self.assertIn("final Reference wall", by_name["body-design.md"]["content"])
+        self.assertIn("Design Dimensions", by_name["body-design.md"]["content"])
+        self.assertIn(
+            "Optional Strategies, Not Templates", by_name["body-design.md"]["content"]
+        )
+        self.assertIn("Anti-template Review", by_name["body-design.md"]["content"])
+        self.assertIn(
+            "final reference audit layer", by_name["body-design.md"]["content"]
+        )
+        self.assertNotIn("Component Grammar", by_name["body-design.md"]["content"])
 
         code, output = run_cli("resources", "get", "starter.html", "--json")
         self.assertEqual(code, 2)
@@ -71,10 +79,12 @@ class MoodboardCliTests(unittest.TestCase):
             self.assertFalse(created["deduped"])
             self.assertTrue(created["created_index"])
             self.assertTrue(Path(created["index_html"]).exists())
-            self.assertIn(
-                "<title>Merge-Probe-A</title>",
-                Path(created["index_html"]).read_text(encoding="utf-8"),
-            )
+            created_html = Path(created["index_html"]).read_text(encoding="utf-8")
+            self.assertIn("<title>Merge-Probe-A</title>", created_html)
+            self.assertIn("provides reset/base/utility primitives only", created_html)
+            self.assertIn(".visually-hidden", created_html)
+            self.assertIn(".container-query", created_html)
+            self.assertIn(".media-contain", created_html)
 
             code, output = run_cli(
                 "project", "create", "--name", "Merge Probe / A", "--base", tmp
@@ -180,6 +190,85 @@ class MoodboardCliTests(unittest.TestCase):
             self.assertFalse(failed["ok"])
             self.assertEqual(failed["error"], "check_failed")
             self.assertFalse(failed["check"]["ok"])
+
+    def test_output_write_accepts_different_body_structures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            images = []
+            for name in ("anchor.jpg", "detail.jpg", "archive.jpg"):
+                path = root / name
+                path.write_bytes(name.encode("utf-8"))
+                images.append(path)
+
+            bodies = [
+                f"""
+<style data-moodboard-theme>
+  .narrative-field {{ display: grid; gap: 1rem; }}
+  .narrative-field img {{ max-inline-size: 100%; block-size: auto; }}
+</style>
+<main class="narrative-field" id="top">
+  <section aria-labelledby="opening">
+    <h1 id="opening">Opening Signal</h1>
+    <figure>
+      <img src="{images[0]}" alt="Anchor reference" width="1200" height="800">
+      <figcaption>One image carries the first impression.</figcaption>
+    </figure>
+  </section>
+  <section aria-labelledby="audit">
+    <h2 id="audit">Reference audit</h2>
+    <img src="{images[2]}" alt="Archive reference" width="900" height="900">
+  </section>
+</main>
+""",
+                f"""
+<main class="evidence-ledger" id="ledger">
+  <h1>Evidence Ledger</h1>
+  <table>
+    <caption>Reference transfer notes</caption>
+    <thead><tr><th scope="col">Role</th><th scope="col">Use</th></tr></thead>
+    <tbody><tr><td>Gesture</td><td>Keep the hand detail quiet.</td></tr></tbody>
+  </table>
+  <aside aria-label="Visual evidence">
+    <figure>
+      <img src="{images[1]}" alt="Detail reference" width="800" height="1200">
+      <figcaption>Detail evidence can sit outside a grid.</figcaption>
+    </figure>
+  </aside>
+  <section aria-labelledby="audit-ledger">
+    <h2 id="audit-ledger">Reference audit</h2>
+    <figure>
+      <img src="{images[2]}" alt="Archive reference" width="900" height="900">
+      <figcaption>Audit layer remains possible without a fixed wall component.</figcaption>
+    </figure>
+  </section>
+</main>
+""",
+            ]
+
+            for index, body in enumerate(bodies, start=1):
+                code, output = run_cli(
+                    "project",
+                    "create",
+                    "--name",
+                    f"Structure Probe {index}",
+                    "--base",
+                    str(root),
+                )
+                self.assertEqual(code, 0, output)
+                project_dir = Path(json_stdout(output)["project_dir"])
+
+                code, output = run_cli(
+                    "output",
+                    "write",
+                    "--project-dir",
+                    str(project_dir),
+                    input_text=body,
+                )
+                self.assertEqual(code, 0, output)
+                payload = json_stdout(output)
+                self.assertTrue(payload["ok"])
+                self.assertTrue(payload["check"]["ok"])
+                self.assertGreaterEqual(len(payload["image_processing"]["rewrites"]), 1)
 
     def test_check_reports_failures_and_e2e_page_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
