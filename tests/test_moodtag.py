@@ -26,6 +26,7 @@ from moodtag_core.contract import (
     DEFAULT_TOP_P,
 )
 from moodtag_core.prompts import read_system_prompt, render_user_prompt
+from moodtag_core.provider import ProviderHTTPError
 from moodtag_core.response import normalize_analysis_json
 from moodtag_core.taxonomy import render_taxonomy_for_prompt
 from scripts import export_moodboard_context
@@ -1083,7 +1084,7 @@ class MoodtagTests(unittest.TestCase):
                         api_key="sk-testPrimarySecretFor400123456",
                         fallback_api_key="sk-testFallbackSecretFor400123456",
                     )
-                    with self.assertRaises(moodtag.ProviderHTTPError):
+                    with self.assertRaises(ProviderHTTPError):
                         client.analyze(image, {"medium": ["photo"]}, retries=0)
         finally:
             primary.shutdown()

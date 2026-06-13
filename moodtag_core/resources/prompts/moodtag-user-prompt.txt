@@ -9,8 +9,8 @@ Field definitions:
 - key: Chinese natural language describing the strongest visual hook and why the image is worth saving.
 - camera: Chinese natural language with key professional terms in English. Describe shot size, angle, lens feel, perspective, framing, subject distance, and scale when visible.
 - light_color: Chinese natural language with key professional terms in English. Describe lighting and color as one creative system.
-- tags: Array of 3-8 exact tags selected only from the allowed taxonomy.
-- use_intents: Array of 0-4 exact internal use intent ids selected only from the left side of the allowed use intents list.
+- tags: Array of exact tags selected only from the allowed taxonomy.
+- use_intents: Array of exact internal use intent ids selected only from the left side of the allowed use intents list.
 
 Language rules:
 - Field names stay English through the JSON keys.
