@@ -6,254 +6,209 @@ Purpose
 
 Generate only an HTML body fragment. Do not generate `<!doctype>`, `<html>`,
 `<head>`, `<body>`, closing document tags, meta tags, viewport tags, or global
-shell code. The CLI owns the full document shell and inserts this fragment into
-the project `index.html`.
+shell code. The CLI owns the document shell and inserts this fragment into
+`index.html`.
 
-This contract is a body-spec for moodboard pages. It governs how creative
-content is expressed as a webpage UI and visual planning interface. It does not
-decide the creative content itself.
+This body-spec governs how creative material becomes a webpage UI and visual
+planning interface. It does not decide the creative direction. The reasoning
+step decides whether a project is rainy, neon, lonely, romantic, harsh, soft,
+or any other aesthetic direction.
 
-The body-spec may say:
-
-- When content includes mood contrast, express it with a two-dimensional mood
-  axis or a contrast map.
-- When content includes palette percentages, express them with proportional
-  color swatches.
-- When content includes sequence, shot rhythm, or narrative order, express it
-  with a horizontal or vertical time lane.
-
-The body-spec must not say that a specific project should be rainy, neon,
-lonely, green, romantic, cinematic, harsh, soft, or any other creative
-direction. Those judgements belong to the moodboard reasoning step.
+The spec may require visual forms for known structures: mood contrast becomes a
+mood axis, contrast map, or paired comparison; palette weights become
+proportional swatches; sequence or shot rhythm becomes a time lane or ordered
+frame system; image sets become grids, walls, strips, comparisons, or sequence
+frames according to role.
 
 Output Boundary
 ---------------
 
-Return a body-only HTML fragment that can be injected into an existing document.
+Return body-only HTML that can be injected into an existing document.
 
-Allowed:
+Allowed: one first-level `<style data-moodboard-theme>` block; semantic body
+content such as `<main>`, `<section>`, `<article>`, `<figure>`,
+`<figcaption>`, `<aside>`, `<blockquote>`, `<ol>`, `<ul>`, and tables only
+when tabular comparison is clearest; project-relative image paths, local
+absolute paths, `file://` URIs, or remote URLs in `<img src>`.
 
-- One first-level `<style data-moodboard-theme>` block when project-specific
-  visual styling is needed.
-- Semantic body content such as `<main>`, `<section>`, `<article>`, `<figure>`,
-  `<figcaption>`, `<aside>`, `<blockquote>`, `<ol>`, `<ul>`, and tables only
-  when tabular comparison is genuinely the clearest form.
-- Project-relative image paths, local absolute paths, `file://` URIs, or remote
-  URLs in `<img src>`. The CLI normalizes local image references during output
-  writing.
-
-Disallowed:
-
-- Full-document tags, document metadata, viewport tags, or document-head edits.
-- External JavaScript, script-dependent interaction, auto-playing carousels, or
-  UI that hides core content behind controls.
-- Empty image sources, duplicate IDs, broken fragment links, and anchors that
-  point nowhere.
-- Fixed content taxonomies that force every project into the same sections.
-- Long production logistics, budgets, call sheets, or operations planning unless
-  a detail directly changes the visual execution.
+Disallowed: full-document tags, metadata, viewport tags, document-head edits,
+external JavaScript, script-dependent interaction, autoplaying carousels, hidden
+core content, empty image sources, duplicate IDs, broken links, fixed
+taxonomies, and long logistics unless they directly change visual execution.
 
 Page Role
 ---------
 
-Design the body as a long-scroll visual planning page for photography,
-editorial portraits, cosplay/IP-inspired shoots, storyboards, visual concept
-development, and creative exploration.
+Design a long-scroll visual planning page for photography, editorial portraits,
+cosplay/IP-inspired shoots, storyboards, visual concept development, and
+creative exploration.
 
-The page should read as a visual planning interface or digital editorial board,
-not as a Markdown note, generic landing page, static checklist, gallery dump, or
-documentation site. It should help a viewer understand how to look, shoot,
+The page should feel like a visual planning interface or digital editorial
+board, not a Markdown note, landing page, static checklist, gallery dump, or
+documentation site. It should help viewers understand how to look, shoot,
 compose, pace, color, style, and sequence the project.
 
 Center the page on images, mood, lens language, framing, rhythm, pose,
 movement, color, styling, motifs, details, main images, pause images,
-close-ups, and sequence flow. Gear, logistics, budget, and operations should
-appear only when they directly affect visual execution.
+close-ups, and sequence flow. Mention gear, logistics, budget, or operations
+only when they directly affect the image.
 
 Design Principles
 -----------------
 
-Use editorial flow rather than a stack of identical cards. Each major section
-must have a clear visual task such as setting the tone, comparing moods,
-showing references, translating references into execution, breaking down color,
-mapping movement, pacing a sequence, or closing with a distilled direction.
+Use editorial flow instead of identical cards. Each major section must have a
+clear visual task: establish tone, compare moods, show references, translate
+references into execution, break down color, map movement, pace a sequence, or
+close with a distilled direction.
 
-Do not impose a fixed heading set, fixed table schema, or checklist format.
-Choose the structure that fits the project: anchor images, mood clusters, pose
-studies, lens language, color scripts, styling cues, motif studies, sequence
-rhythm, contrast maps, or reference essays are all acceptable.
+Choose structure from the project material rather than a fixed heading set.
+Valid structures include anchor images, mood clusters, pose studies, lens
+language, color scripts, styling cues, motif studies, sequence rhythm, contrast
+maps, and reference essays.
 
-Use at least two or three visual rhythms on substantial pages. Combine large
-image impact, dense reference reading, quiet prose, compact comparison cards,
-axis diagrams, color strips, and sequence lanes as the content requires.
+Substantial pages should combine at least two or three rhythms: large image
+impact, dense reference reading, quiet prose, compact comparison cards, axis
+diagrams, color strips, sequence lanes, or shot maps.
 
-Cards are for short, peer-level, comparable information. Use prose, pull quotes,
-image-led sections, or diagrams for long aesthetic reasoning. Avoid turning
-every section into `title + paragraph + three cards`.
+Cards are for short peer-level comparisons. Use prose, pull quotes, image-led
+sections, or diagrams for long aesthetic reasoning. Avoid making every section
+`title + paragraph + three cards`.
 
-Visual hierarchy should be obvious at a glance on phone, tablet, and desktop:
-large anchors for the most important idea, medium panels for supporting
-clusters, compact elements for labels, notes, and metadata.
+Visual hierarchy must be obvious on phone, tablet, and desktop: large anchors
+for primary ideas, medium panels for supporting clusters, compact elements for
+labels, notes, and metadata.
 
-Component Selection Grammar
----------------------------
+Component Grammar
+-----------------
 
-Choose visual components from the structure of the content, not from a fixed
-template.
+Choose components by content role, not template habit:
 
-Use a hero or title sequence when the content has one dominant visual premise,
-anchor image, title, or opening mood. The hero should establish tone quickly and
-may use one strong image, a large typographic statement, and a small amount of
-supporting context.
+- Hero or title sequence: one dominant premise, anchor image, title, or opening
+  mood.
+- Rhythm grid: three to six references with clear priority. Mark items with
+  semantic classes such as `is-lead`, `is-wide`, `is-tall`, `is-quiet`, or
+  `is-accent`.
+- Reference wall: many equal-status references scanned together, with compact
+  transferable captions.
+- Detail strip: makeup, hair, fabric, props, gestures, hands, accessories,
+  light fragments, surface texture, or local color.
+- Mood axis or contrast map: content-derived emotional poles or opposing visual
+  treatments.
+- Proportional swatches: known or inferred palette weights. Simple swatch rows
+  are enough when percentages are unreliable.
+- Time lane: time, narrative order, shoot sequence, emotional progression,
+  scene order, or shot rhythm.
+- Shot map: executable frames describing crop, action, distance, lens language,
+  light direction, pose, movement, or foreground/background relationships.
+- Bento or mixed grid: mixed media with clear relative importance. Do not nest
+  cards.
+- Pull quote or large type: concise creative principle only, not ordinary body
+  copy or panel headings.
 
-Use a rhythm grid when the content has three to six references with clear visual
-priority. Give explicit semantic classes such as `is-lead`, `is-wide`,
-`is-tall`, `is-quiet`, or `is-accent`; do not rely on `:nth-child()` to decide
-which item is important.
+Grid And Image Layout
+---------------------
 
-Use a reference wall when the content contains many equal-status references
-that need to be scanned together. Keep each reference compact and make each
-caption explain the transferable use of the image.
+Image layout is part of the concept. Before placing images, define the layout
+system: component role, column count, row rhythm, tile aspect ratios, gaps, and
+semantic priority.
 
-Use a detail strip when the content is about small visual cues: makeup, hair,
-fabric, props, gestures, hands, accessories, light fragments, surface texture,
-or local color. A horizontal scroll-snap strip is acceptable for many equal
-references, but key content should remain visible somewhere on the page.
+Use CSS Grid for primary image groups that need two-dimensional order. Grid
+tracks, gutters, and explicit spans make rows, columns, priority, and reading
+order auditable. Use Flexbox for one-dimensional strips. Do not use CSS columns
+or masonry-style flows for primary concept, sequence, or rhythm sections.
 
-Use a mood axis when the content contains tension, contrast, or two dimensions
-of feeling. Label the axes with content-derived poles and place cues, looks,
-shots, or references in relation to those poles.
+Every primary image group must resolve into an intentional rectangle or clean
+band. Avoid ragged right edges, accidental holes, orphan tiles, and uneven
+bottom edges unless the asymmetry is deliberate and content-led. Close uneven
+counts with a lead tile, wide tile, text note, palette module, or controlled
+negative-space panel.
 
-Use a contrast map when the content compares opposing visual treatments:
-hard/soft, public/private, still/moving, warm/cool, polished/raw,
-graphic/organic, distance/intimacy, or similar pairs.
+Set stable media geometry before images load: use explicit `aspect-ratio`
+values or grid row spans; include `width` and `height` when known; constrain
+media with `max-inline-size: 100%` and `block-size: auto`; use
+`object-fit: cover` for intentional editorial crops and `object-fit: contain`
+only when the full reference must remain visible; set `object-position` when
+faces, hands, props, or composition lines must not be cropped accidentally.
 
-Use proportional color swatches when the content includes palette weights,
-dominant/accent relationships, or approximate percentages. Encode the ratio in
-width or area, not just in repeated equal blocks.
+Use named layout roles instead of `:nth-child()` placement. Mark which image is
+lead, wide, tall, quiet, accent, pause, detail, or climax, then map those roles
+to grid spans and aspect ratios.
 
-Use a simple swatch row when the content has a palette but no reliable
-percentage information. Five to seven colors is usually enough. Prefer semantic
-names such as `shadow blue`, `skin warmth`, `signal red`, or `concrete gray`
-over bare hex values.
+Keep repeated grids coherent: one gap scale per component; a limited aspect
+ratio set such as `16 / 9`, `4 / 3`, `3 / 4`, `1 / 1`, or `2 / 3`; no random
+mix of unrelated proportions; captions that do not unpredictably resize tiles;
+compact text placed in a fixed caption area, overlay band, or note column.
 
-Use a time lane when the content contains time, narrative order, shooting
-sequence, emotional progression, scene order, or shot rhythm. The lane may be
-horizontal for scanable stages or vertical for a more editorial long-scroll
-story.
-
-Use a shot map when the content translates references into executable frames:
-framing, action, distance, crop, lens language, light direction, pose, movement,
-or foreground/background relationships.
-
-Use a bento or mixed grid only when the content has mixed media types and clear
-relative importance: one dominant reference, supporting details, small text
-signals, palette chips, or micro-notes. Do not use nested cards.
-
-Use pull quotes or large typography when the content has a concise creative
-principle, but do not use oversized type for ordinary body copy or small panel
-headings.
+Masonry is allowed only as a secondary reference wall when abundance is the
+point, items are equal-status, reading order is not semantic, and the fallback
+still looks coherent. Do not rely on experimental native masonry as the default
+layout.
 
 Image Use
 ---------
 
-Use `<img>` elements for visual references when helpful. Every meaningful image
-must have useful `alt` text. Decorative overlays should not replace useful alt
-text on the underlying reference.
+Use `<img>` for visual references. Every meaningful image needs useful `alt`
+text, and decorative overlays must not replace the underlying alt text.
 
-Choose image layouts by reading role:
+Choose layouts by role: hero image for one dominant first impression; rhythm
+grid for deliberate scale differences; reference wall for peer comparison;
+detail strip for close-up evidence; paired comparison for contrast; sequence
+frames for progression or shot rhythm.
 
-- Hero image: one dominant image for tone and first impression.
-- Rhythm grid: a small set of references with deliberate scale differences.
-- Reference wall: many peer references for comparison and extraction.
-- Detail strip: small local cues and repeated close-up evidence.
-- Paired comparison: two images or panels that clarify contrast.
-- Sequence frames: ordered images that show progression or shot rhythm.
+Use `<figure>` and `<figcaption>` when interpretation is needed. Captions
+should say what is borrowed, how it transfers, and what to watch during
+execution, not merely describe appearance. Avoid vague captions such as
+`nice mood`, `cinematic`, `beautiful reference`, or `good lighting`.
 
-Use `<figure>` and `<figcaption>` for references that need interpretation.
-Captions should explain what the reference is used for, not merely describe what
-is visible. A useful caption answers: what is borrowed, how it transfers, and
-what to watch during execution.
-
-Avoid vague captions such as `nice mood`, `cinematic`, `beautiful reference`,
-or `good lighting`. Prefer action-oriented captions such as `low angle with
-compressed background; use the fence as a distance layer` or `warm edge light
-only on hair and hands; keep the face mostly neutral`.
-
-When references come from different sources with inconsistent color, use scoped
-CSS treatment such as subtle overlays, shared borders, or restrained filters to
-make the board cohesive. Do not make filtering so strong that the reference
-becomes misleading.
+When references vary by source, use subtle scoped treatment such as shared
+borders, restrained filters, overlays, or consistent frame geometry. Do not
+filter so strongly that references become misleading.
 
 Color Expression
 ----------------
 
-Color UI must behave like a planning tool, not decoration.
-
-When palette ratios are known or inferred, use proportional swatches. A dominant
-environment color should occupy more space than a minor accent. When exact
-percentages are unknown, communicate relative weight with labels such as
+Color UI must behave like a planning tool. Use proportional swatches when
+palette ratios are known or inferred; otherwise label relative weight such as
 `dominant`, `support`, `skin/highlight`, and `accent`.
 
-Each key color should carry a semantic role and a practical use. Good examples:
+Each key color should carry a semantic role and practical use, such as
 `background shadow`, `skin warmth`, `signal accent`, `metal highlight`,
 `wardrobe base`, `prop color`, `negative space`, or `transition tone`.
 
-Where useful, map the palette to CSS variables in the body-scoped style block so
-the page's interface and the shoot palette feel connected. Keep the mapping
-local to the generated body.
+Where useful, map the palette to local CSS variables so the interface and shoot
+palette feel connected. Keep the mapping scoped to the generated body.
 
-Sequence And Rhythm
--------------------
+Sequence, Mood, And Contrast
+----------------------------
 
-When the content includes a beginning, middle, ending, transformation, scene
-order, time of day, or shot progression, express it visually. Do not reduce it
-to a plain list unless the sequence is minor.
+When content includes a beginning, middle, ending, transformation, scene order,
+time of day, or shot progression, express it visually rather than as a plain
+list.
 
 A time lane should make order visible through position, numbering, linework,
-spacing, or alternating panels. It may include images, short stage names,
-movement notes, light changes, color shifts, or framing cues.
+spacing, or alternating panels. A shot rhythm section should vary wide, medium,
+close, detail, pause, transition, and climax frames when supported.
 
-A shot rhythm section should show variation. Use a mix of wide, medium, close,
-detail, pause, transition, and climax frames when the content supports it. Make
-the pacing readable without requiring long prose.
-
-Mood And Contrast
------------------
-
-When the content contains emotional opposition, build a mood axis, contrast
-map, paired comparison, or gradient section. The component should make the
-tension spatially visible.
-
-Mood components should not invent new content. Axis labels, poles, placements,
-and notes must be derived from the creative reasoning already available for the
-project.
+When content contains emotional opposition, build a mood axis, contrast map,
+paired comparison, or gradient section that makes the tension spatially
+visible. Axis labels, poles, placements, and notes must come from the creative
+reasoning already available for the project.
 
 Layout Language
 ---------------
 
-Use semantic, reusable class names that describe component role, not project
-identity. Prefer names such as `.moodboard-canvas`, `.section-shell`,
-`.hero-sequence`, `.rhythm-grid`, `.reference-wall`, `.detail-strip`,
-`.time-lane`, `.mood-axis`, `.shot-map`, `.color-script`, `.palette-band`,
-`.signal-card`, `.section-kicker`, and `.caption-note`.
+Use semantic reusable class names that describe component role, not project
+identity. Prefer `.moodboard-canvas`, `.section-shell`, `.hero-sequence`,
+`.rhythm-grid`, `.reference-wall`, `.detail-strip`, `.time-lane`, `.mood-axis`,
+`.shot-map`, `.color-script`, `.palette-band`, `.signal-card`,
+`.section-kicker`, and `.caption-note`.
 
-Avoid project-specific class names such as `.ran-board` or `.neon-rain-card`
-inside a reusable body unless the project identity truly needs a one-off hook.
-
-Avoid using `:nth-child()` as the main way to assign layout roles. Add explicit
-semantic classes in the markup instead. This makes generated pages easier to
-audit and revise.
-
-Use stable dimensions for fixed-format UI elements. Image boxes, strips, grids,
-tiles, counters, labels, and compact panels should have predictable aspect
-ratios, min/max sizes, or grid tracks so content changes do not collapse the
-layout.
-
-Do not place UI cards inside other cards. Page sections should be full-width
-bands or unframed layouts with constrained inner content. Cards are acceptable
-for repeated items, compact comparisons, shot cards, reference items, and
-modal-like framed tools.
+Avoid project-specific class names unless identity truly needs a one-off hook.
+Use stable dimensions for image boxes, strips, grids, tiles, counters, labels,
+and compact panels. Do not place cards inside cards. Page sections should be
+full-width bands or unframed layouts with constrained inner content. Cards are
+acceptable for repeated items, compact comparisons, shot cards, reference
+items, and modal-like framed tools.
 
 Horizontal scroll is acceptable only for peer references or detail strips. Do
 not hide the primary idea, sequence, or final direction inside a carousel.
@@ -261,57 +216,38 @@ not hide the primary idea, sequence, or final direction inside a carousel.
 Responsive Behavior
 -------------------
 
-The body must be readable on phone, tablet, and desktop. Use responsive grid,
+The body must be readable on phone, tablet, and desktop. Use responsive grids,
 container-aware layout, flexible spacing, and stable aspect ratios.
 
 Prefer component-local layout logic over a single global breakpoint scheme.
-When using container queries, keep them scoped to generated components. If using
-viewport media queries, keep them simple and verify that mobile reading remains
-clear.
+Scoped container queries are acceptable. Viewport media queries should stay
+simple and preserve mobile reading.
 
 Do not scale font size directly with viewport width alone. Use stable type
 tokens or `clamp()` values with readable minimums and maximums. Letter spacing
 should generally remain `0`, except for small uppercase labels where modest
 positive tracking may help.
 
-Ensure text fits within buttons, labels, cards, captions, and panels. Long words
-or names should wrap gracefully. Text must not overlap images or adjacent UI in
-an incoherent way.
+Ensure text fits inside buttons, labels, cards, captions, and panels. Long
+words or names should wrap gracefully. Text must not overlap images or adjacent
+UI.
 
-Dark And Light Themes
----------------------
+Themes, Accessibility, And Robustness
+-------------------------------------
 
-Dark pages need clear layer separation. Use distinct surface levels, section
-background shifts, line strength, captions, and accent rules so panels do not
-collapse into one dark field.
+Dark pages need clear layer separation through surface levels, section
+background shifts, line strength, captions, and accent rules. Light pages need
+contrast, controlled surfaces, strong image rhythm, subtle lines, and clear
+type hierarchy. Avoid one-note UI palettes even when respecting the project's
+palette.
 
-Light pages need sufficient contrast and should not become a bland white
-document. Use controlled surfaces, strong image rhythm, subtle lines, and clear
-type hierarchy.
+Use logical heading order, real text for labels and notes, and useful `alt`
+text for meaningful images. Decorative images may use empty alt text, but
+important visual information should not be decorative.
 
-Avoid one-note palettes in the UI. The page may respect the project's palette,
-but the interface still needs enough contrast, neutral structure, and hierarchy
-to be readable.
-
-Accessibility And Robustness
-----------------------------
-
-Every meaningful image must have useful `alt` text. Images used only as
-decorative texture may use empty alt text, but avoid making important visual
-information decorative.
-
-Use headings in a logical order when possible. Do not choose heading levels only
-for visual size; style headings with CSS instead.
-
-Use real text for labels, captions, and notes. Do not bake essential text into
-images.
-
-Avoid script-only interaction. The final page must remain useful when opened as
-a static local HTML file.
-
-Reasonable PDF export behavior matters. Avoid layouts that split a single
-figure, shot card, or major comparison awkwardly across pages when simple CSS
-can prevent it.
+Avoid script-only interaction. The page must remain useful as a static local
+HTML file. Avoid layouts that split a single figure, shot card, grid, or major
+comparison awkwardly across PDF pages when simple CSS can prevent it.
 
 Body Style Block Rules
 ----------------------
@@ -324,42 +260,31 @@ If a style block is included, put it near the top of the fragment:
 </style>
 ```
 
-The style block should be scoped to generated body classes. It may define local
-tokens for color, spacing, radius, type, shadows, surfaces, and aspect ratios.
-It should not depend on editing the document head.
-
-Use CSS layers when helpful, but do not require them if a smaller scoped style
-block is clearer. Keep selectors understandable and avoid global resets beyond
-the body fragment's root class.
+Scope the style block to generated body classes. It may define local tokens for
+color, spacing, radius, type, shadows, surfaces, and aspect ratios, but must
+not depend on editing the document head. Use CSS layers only when they keep the
+style block clearer.
 
 Minimal Body Shape
 ------------------
 
-There is no required section list, but a strong body normally has:
+There is no required section list, but a strong body normally has a root
+`<main>` with a stable class such as `.moodboard-canvas` or `.moodboard-page`,
+a first visual anchor, sections that translate references into visual
+decisions, image-led evidence where available, and a readable closing or
+synthesis when useful.
 
-- A root `<main>` with a stable class such as `.moodboard-canvas` or
-  `.moodboard-page`.
-- A first visual anchor that establishes the page's direction.
-- One or more sections that translate references into visual decisions.
-- Image-led evidence where images are available.
-- A readable closing or synthesis when the project benefits from one.
-
-The exact sections, labels, and components should come from the project
-material.
+The exact sections, labels, and components must come from the project material.
 
 Quality Bar
 -----------
 
-Before returning the body fragment, check that:
-
-- The result is body-only HTML.
-- Core content is visible without JavaScript.
-- The page is a visual planning interface, not a generic note.
-- Component choices match content structure.
-- Images have useful alt text and captions where interpretation is needed.
-- Captions explain usage rather than only appearance.
-- Palette, sequence, mood, and shot components appear only when the content
-  supports them.
-- Class names are semantic and reusable.
-- Layout remains readable across phone, tablet, desktop, and reasonable PDF
-  export.
+Before returning the body fragment, check that it is body-only HTML; core
+content is visible without JavaScript; the page is a visual planning interface;
+component choices match content structure; primary image layouts form complete
+rectangles or clean bands; image frames have stable aspect ratios, dimensions,
+or grid tracks; images have useful alt text and interpretive captions where
+needed; palette, sequence, mood, and shot components appear only when
+supported; class names are semantic and reusable; text does not overlap images
+or adjacent UI; and layout remains readable across phone, tablet, desktop, and
+reasonable PDF export.
