@@ -191,6 +191,52 @@ class MoodboardCliTests(unittest.TestCase):
             self.assertEqual(failed["error"], "check_failed")
             self.assertFalse(failed["check"]["ok"])
 
+    def test_output_write_summary_omits_large_details_but_keeps_failures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_image = root / "reference.jpg"
+            source_image.write_bytes(b"reference")
+            code, output = run_cli(
+                "project", "create", "--name", "Summary Probe", "--base", str(root)
+            )
+            self.assertEqual(code, 0, output)
+            project_dir = Path(json_stdout(output)["project_dir"])
+            body = f'<main class="moodboard-page" id="top"><a href="#top">Top</a><img src="{source_image}" alt="Reference"></main>'
+
+            code, output = run_cli(
+                "output",
+                "write",
+                "--project-dir",
+                str(project_dir),
+                "--summary",
+                input_text=body,
+            )
+            self.assertEqual(code, 0, output)
+            payload = json_stdout(output)
+            self.assertTrue(payload["ok"])
+            self.assertNotIn("body", payload)
+            self.assertEqual(payload["image_processing"]["rewrite_count"], 1)
+            self.assertEqual(payload["image_processing"]["missing_count"], 0)
+            self.assertTrue(payload["check"]["ok"])
+            self.assertEqual(payload["check"]["missing_alt"], [])
+
+            bad_body = '<main class="moodboard-page"><img src="missing.jpg"></main>'
+            code, output = run_cli(
+                "output",
+                "write",
+                "--project-dir",
+                str(project_dir),
+                "--summary",
+                input_text=bad_body,
+            )
+            self.assertEqual(code, 1)
+            failed = json_stdout(output)
+            self.assertFalse(failed["ok"])
+            self.assertEqual(failed["error"], "check_failed")
+            self.assertFalse(failed["check"]["ok"])
+            self.assertTrue(failed["check"]["missing_alt"])
+            self.assertTrue(failed["check"]["missing_local_assets"])
+
     def test_output_write_accepts_different_body_structures(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -109,6 +109,8 @@ def command_output_write(args: argparse.Namespace) -> int:
         argv.extend(["--cache-dir", args.cache_dir])
     if args.localhost_mode:
         argv.append("--localhost-mode")
+    if args.summary:
+        argv.append("--summary")
     return output_core.main(argv)
 
 
@@ -203,6 +205,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     output_write.add_argument("--cache-dir", default="assets/references")
     output_write.add_argument("--localhost-mode", action="store_true")
+    output_write.add_argument(
+        "--summary",
+        action="store_true",
+        help="Return compact JSON with counts and actionable failures only",
+    )
     output_write.set_defaults(func=command_output_write)
 
     serve = sub.add_parser("serve", help="Serve a moodboard project on localhost")

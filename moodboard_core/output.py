@@ -13,6 +13,49 @@ from . import body as body_core
 from . import check as check_core
 
 
+def summarize_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    body_payload = payload.get("body")
+    check_payload = payload.get("check")
+    image_processing = payload.get("image_processing")
+    if not isinstance(body_payload, dict):
+        body_payload = {}
+    if not isinstance(check_payload, dict):
+        check_payload = {}
+    if not isinstance(image_processing, dict):
+        image_processing = {}
+
+    rewrites = image_processing.get("rewrites") or []
+    materialized = image_processing.get("materialized") or []
+    missing = image_processing.get("missing") or []
+    remote_kept = image_processing.get("remote_kept") or []
+
+    return {
+        "ok": payload.get("ok", False),
+        "error": payload.get("error"),
+        "project_dir": payload.get("project_dir"),
+        "index_html": payload.get("index_html"),
+        "updated_at": body_payload.get("updated_at"),
+        "image_processing": {
+            "rewrite_count": len(rewrites),
+            "materialized_count": len(materialized),
+            "missing_count": len(missing),
+            "remote_kept_count": len(remote_kept),
+            "missing": missing,
+            "manifest_path": image_processing.get("manifest_path"),
+        },
+        "check": {
+            "ok": check_payload.get("ok"),
+            "checks": check_payload.get("checks", {}),
+            "missing_alt": check_payload.get("missing_alt", []),
+            "duplicate_ids": check_payload.get("duplicate_ids", []),
+            "link_failures": check_payload.get("link_failures", []),
+            "missing_local_assets": check_payload.get("missing_local_assets", []),
+            "localhost_unsafe_assets": check_payload.get("localhost_unsafe_assets", []),
+            "localhost_unsafe_links": check_payload.get("localhost_unsafe_links", []),
+        },
+    }
+
+
 def run_json_command(
     func: Callable[[list[str]], int], argv: list[str]
 ) -> tuple[int, dict[str, Any], str]:
@@ -40,6 +83,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--cache-dir", default="assets/references")
     parser.add_argument("--localhost-mode", action="store_true")
+    parser.add_argument(
+        "--summary",
+        action="store_true",
+        help="Emit compact JSON with counts and actionable failures only",
+    )
     args = parser.parse_args(argv)
 
     project_dir = Path(args.project_dir).expanduser()
@@ -63,18 +111,19 @@ def main(argv: list[str] | None = None) -> int:
 
     body_code, body_payload, _body_stdout = run_json_command(body_core.main, body_argv)
     if body_code != 0:
-        print(
-            json.dumps(
-                {
-                    "ok": False,
-                    "error": "body_apply_failed",
-                    "project_dir": str(project_dir),
-                    "index_html": str(index_path),
-                    "body": body_payload,
-                },
-                ensure_ascii=False,
-            )
-        )
+        payload = {
+            "ok": False,
+            "error": "body_apply_failed",
+            "project_dir": str(project_dir),
+            "index_html": str(index_path),
+            "body": body_payload,
+            "image_processing": body_payload.get("image_processing")
+            if isinstance(body_payload, dict)
+            else None,
+            "check": None,
+        }
+        result = summarize_payload(payload) if args.summary else payload
+        print(json.dumps(result, ensure_ascii=False))
         return body_code
 
     check_argv = [str(project_dir), "--check-assets", "--check-links"]
@@ -84,35 +133,29 @@ def main(argv: list[str] | None = None) -> int:
         check_core.main, check_argv
     )
     if check_code != 0:
-        print(
-            json.dumps(
-                {
-                    "ok": False,
-                    "error": "check_failed",
-                    "project_dir": str(project_dir),
-                    "index_html": str(index_path),
-                    "body": body_payload,
-                    "image_processing": body_payload.get("image_processing"),
-                    "check": check_payload,
-                },
-                ensure_ascii=False,
-            )
-        )
+        payload = {
+            "ok": False,
+            "error": "check_failed",
+            "project_dir": str(project_dir),
+            "index_html": str(index_path),
+            "body": body_payload,
+            "image_processing": body_payload.get("image_processing"),
+            "check": check_payload,
+        }
+        result = summarize_payload(payload) if args.summary else payload
+        print(json.dumps(result, ensure_ascii=False))
         return check_code
 
-    print(
-        json.dumps(
-            {
-                "ok": True,
-                "project_dir": str(project_dir),
-                "index_html": str(index_path),
-                "body": body_payload,
-                "image_processing": body_payload.get("image_processing"),
-                "check": check_payload,
-            },
-            ensure_ascii=False,
-        )
-    )
+    payload = {
+        "ok": True,
+        "project_dir": str(project_dir),
+        "index_html": str(index_path),
+        "body": body_payload,
+        "image_processing": body_payload.get("image_processing"),
+        "check": check_payload,
+    }
+    result = summarize_payload(payload) if args.summary else payload
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 
