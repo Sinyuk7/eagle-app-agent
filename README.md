@@ -1,181 +1,93 @@
 # eagle-app-agent
 
-`eagle-app-agent` provides the `moodtag` CLI, a local tool for tagging Eagle
-moodboard folders.
+`eagle-app-agent` 提供 `moodtag` CLI，用来读取 Eagle App 文件夹里的图片，并生成可写回 Eagle 的标签和备注。
 
-The workflow is folder-first:
+## 1. 安装
 
-1. Create a folder in Eagle.
-2. Drag moodboard images into that folder.
-3. Run `moodtag` against the Eagle folder.
-4. Review the dry-run output.
-5. Add `--write` only when you want to overwrite Eagle metadata.
-
-`moodtag` does not create staging image folders, sidecar caches, or default
-report files. It talks to the local Eagle desktop Web API and to an
-OpenAI-compatible vision API.
-
-## Install
-
-Install the CLI from this checkout:
+发布到 PyPI 后，推荐这样安装：
 
 ```sh
-uv tool install --editable /Users/sinyuk/Documents/github/eagle-app-agent
+uv tool install eagle-app-agent
 ```
 
-Confirm that the command is visible in your shell:
+确认安装成功：
 
 ```sh
 moodtag --help
 ```
 
-## Configure
-
-Store non-secret defaults with `moodtag config`:
+如果还没有发布 PyPI，可以临时从 GitHub 安装：
 
 ```sh
-moodtag config set --base-url https://dashscope.aliyuncs.com/compatible-mode/v1 \
-  --fallback-base-url https://api.n1n.ai/v1 \
-  --model qwen3.5-122b-a10b \
-  --fallback-model qwen3.5-122b-a10b
+uv tool install git+https://github.com/Sinyuk7/eagle-app-agent.git
 ```
 
-Keep API keys in the environment or in a local `.env` file:
-
-```sh
-export DASHSCOPE_API_KEY=...
-export MOODTAG_API_KEY=... # optional relay fallback
-```
-
-`moodtag` loads `.env` from the current working directory without overriding
-variables that are already exported in the shell. Use `.env.example` as the
-template for local values.
-
-Show the effective saved defaults:
-
-```sh
-moodtag config show
-```
-
-Configuration precedence is:
-
-1. CLI flags
-2. Environment variables and current-directory `.env`
-3. User config
-4. Built-in defaults
-
-## Common Usage
-
-Check a folder before doing any model or write work:
-
-```sh
-moodtag status --board '<eagle-folder>'
-```
-
-Run a read-only analysis:
-
-```sh
-moodtag tag --board '<eagle-folder>'
-```
-
-Write tags and annotation back to Eagle:
-
-```sh
-MOODTAG_API_KEY=... moodtag tag --board '<eagle-folder>' --write
-```
-
-Process only a small batch:
-
-```sh
-moodtag tag --board '<eagle-folder>' --write --limit 5
-```
-
-Export processed folder context as Markdown:
-
-```sh
-moodtag export-context --board '<eagle-folder>' --output context.md
-```
-
-Build a brief from existing Eagle metadata:
-
-```sh
-moodtag brief --board '<eagle-folder>'
-```
-
-Clear Moodtag-owned annotations and tags:
-
-```sh
-moodtag reset --board '<eagle-folder>' --write
-```
-
-`<eagle-folder>` can be an Eagle folder id, exact folder name, or folder path.
-If a name is ambiguous, use the Eagle folder id.
-
-## Write Behavior
-
-`tag` is a dry run unless `--write` is passed.
-
-`tag --write` overwrites each processed item's Eagle `tags` and `annotation`
-with Moodtag output. It does not merge with existing Eagle metadata.
-
-`tag --write --force` reprocesses items that already have Moodtag output. Use it
-only when you intentionally want a full overwrite.
-
-`reset --write` clears both annotation and tags for the target folder.
-
-Generated annotation is written as a fixed field block:
+使用前请先打开 Eagle App。默认会连接 Eagle 本地 API：
 
 ```text
-Brief: ...
-
-Elements: ...
-
-Use: ...
-
-Key: ...
-
-Camera: ...
-
-LightColor: ...
+http://localhost:41595
 ```
 
-`tags` and `use_intents` from the model response are written only as Eagle tags,
-never inside annotation text.
+模型服务和 API Key 通常由维护者配置。需要本地配置时看 `CONTRIBUTING.md`。
 
-## Settings
+## 2. 找到 Eagle 文件夹 ID
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `MOODTAG_EAGLE_API` | `http://localhost:41595` | Eagle desktop Web API URL. |
-| `MOODTAG_BASE_URL` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | Primary OpenAI-compatible vision API base URL. |
-| `MOODTAG_FALLBACK_BASE_URL` | `https://api.n1n.ai/v1` | Optional relay fallback base URL for retryable provider failures. |
-| `MOODTAG_MODEL` | `qwen3.5-122b-a10b` | Primary vision/chat model name. |
-| `MOODTAG_FALLBACK_MODEL` | `qwen3.5-122b-a10b` | Optional relay fallback model name. |
-| `DASHSCOPE_API_KEY` | empty | Primary Alibaba Cloud DashScope API key. |
-| `MOODTAG_API_KEY` | empty | Optional relay fallback API key. |
-| `VL_API_KEY` | empty | Backward-compatible fallback API key. |
-| `MOODTAG_TAXONOMY` | bundled default | Optional custom tag taxonomy JSON file. |
-| `MOODTAG_IMAGE_EDGE` | `1024` | Preview image long edge sent to the model. |
-| `MOODTAG_MAX_TAGS` | `15` | Maximum Eagle tags written per item. |
-| `MOODTAG_RETRIES` | `2` | Retry count for model calls. |
-| `MOODTAG_TEMPERATURE` | `0.6` | Model temperature. |
-| `MOODTAG_TOP_P` | `0.85` | Model top-p. |
-| `MOODTAG_MAX_TOKENS` | `1028` | Max output tokens. Values below 1028 are rejected. |
-| `MOODTAG_NO_RESPONSE_FORMAT` | `false` | `false` sends JSON Mode. Set `true` only for providers that reject JSON Mode. |
+在 Eagle App 左侧文件夹上右键，选择复制链接，会得到类似：
 
-The primary provider uses `DASHSCOPE_API_KEY`. On network errors, HTTP 5xx,
-HTTP 429, or recognizable quota/billing throttling failures, `moodtag` falls
-back to `MOODTAG_FALLBACK_BASE_URL` with `MOODTAG_API_KEY`/`VL_API_KEY`. After a
-primary fallback-class failure, the primary provider is skipped for 1800 seconds
-using a local cache entry under the user cache directory.
+```text
+http://localhost:41595/folder?id=MQBUH98ILYTQ0
+```
 
-Useful single-run flags include `--eagle-api`, `--base-url`,
-`--fallback-base-url`, `--model`, `--taxonomy`, `--image-edge`, `--max-tags`,
-`--limit`, `--retries`, `--temperature`, `--top-p`, `--max-tokens`,
-`--response-format`, and `--no-response-format`.
+取 `id=` 后面的值作为 `--board`：
 
-## More Documentation
+```text
+MQBUH98ILYTQ0
+```
 
-- `HANDOFF.md`: strict public CLI contract for external agents or upper-layer
-  modules.
-- `CONTRIBUTING.md`: local development, tests, and E2E checks for maintainers.
+虽然 `--board` 也支持精确文件夹名或路径，但推荐始终使用文件夹 ID，避免重名。
+
+## 3. 执行
+
+先查看文件夹状态：
+
+```sh
+moodtag status --board 'MQBUH98ILYTQ0'
+```
+
+只读分析，不写入 Eagle：
+
+```sh
+moodtag tag --board 'MQBUH98ILYTQ0'
+```
+
+确认输出后，写回 Eagle：
+
+```sh
+moodtag tag --board 'MQBUH98ILYTQ0' --write
+```
+
+导出文件夹上下文为 Markdown：
+
+```sh
+moodtag export-context --board 'MQBUH98ILYTQ0' --output context.md
+```
+
+## 必要信息
+
+`moodtag tag` 默认是 dry run，不会修改 Eagle。只有加上 `--write` 才会写入。
+
+`moodtag tag --write` 会覆盖被处理图片的 Eagle `tags` 和 `annotation`，不会和原有元数据合并。
+
+只处理一小批图片：
+
+```sh
+moodtag tag --board 'MQBUH98ILYTQ0' --write --limit 5
+```
+
+重新处理已有 Moodtag 输出的图片：
+
+```sh
+moodtag tag --board 'MQBUH98ILYTQ0' --write --force
+```
+
+维护者文档、环境变量、测试和发布检查见 `CONTRIBUTING.md`。

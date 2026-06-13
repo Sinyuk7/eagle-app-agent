@@ -1,0 +1,44 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Build and publish to PyPI
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Run tests
+        run: uv run python -m unittest discover -s tests
+
+      - name: Build distributions
+        run: uv build --no-sources
+
+      - name: Check distributions
+        run: uv run --no-project --with twine -- python -m twine check dist/*
+
+      - name: Smoke test wheel command
+        run: uv run --no-project --with "dist/eagle_app_agent-"*.whl -- moodtag --help
+
+      - name: Publish distributions
+        run: uv publish --trusted-publishing always

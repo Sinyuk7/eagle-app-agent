@@ -4,9 +4,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-PYTHON_BIN="${PYTHON:-python}"
+if [[ -n "${PYTHON:-}" ]]; then
+  PYTHON_CMD=("$PYTHON")
+else
+  PYTHON_CMD=(uv run python)
+fi
 
-"$PYTHON_BIN" -m unittest discover -s tests
+"${PYTHON_CMD[@]}" -m unittest discover -s tests
 
 rm -rf dist build
 uv build --no-sources
