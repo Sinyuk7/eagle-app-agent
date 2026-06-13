@@ -9,8 +9,8 @@ Field definitions:
 - key: Chinese natural language describing the strongest visual hook and why the image is worth saving.
 - camera: Chinese natural language with key professional terms in English. Describe shot size, angle, lens feel, perspective, framing, subject distance, and scale when visible.
 - light_color: Chinese natural language with key professional terms in English. Describe lighting and color as one creative system.
-- tags: Array of exact tags selected only from the allowed taxonomy.
-- use_intents: Array of exact internal use intent ids selected only from the allowed use intents.
+- tags: Array of 3-8 exact tags selected only from the allowed taxonomy.
+- use_intents: Array of 0-4 exact internal use intent ids selected only from the left side of the allowed use intents list.
 
 Language rules:
 - Field names stay English through the JSON keys.
@@ -20,6 +20,8 @@ Language rules:
 - Elements should look like "白发少女", "角饰", "黑色战术服", "蓝色弹药带", "户外街道", "废墟拱门"; never like "风吹发丝", "低机位", "动态姿势", "戏剧性", "pose ref".
 - Do not invent tags.
 - If a tag is uncertain, omit it.
+- Do not output pipeline tag names inside use_intents. For example, output "pose_reference", not "pose ref"; output "aigc_prompt_reference", not "prompt ref".
+- Do not repeat any tag or use_intent.
 
 Allowed taxonomy:
 {{taxonomy}}
@@ -32,3 +34,4 @@ Output rules:
 - Do NOT wrap in markdown or code blocks.
 - Response must start with { and end with }.
 - No text before or after JSON.
+- Close every array and close the final JSON object.

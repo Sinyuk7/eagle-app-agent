@@ -20,7 +20,7 @@ import moodtag  # noqa: E402
 
 DEFAULT_BOARD = "明日方舟 - 小红书"
 DEFAULT_FIRST_LIMIT = 5
-DEFAULT_LIVE_MODEL = "qwen3.5-122b-a10b"
+DEFAULT_LIVE_MODEL = moodtag.DEFAULT_MODEL
 
 
 @dataclass
@@ -125,7 +125,9 @@ def preflight(
     base_url: str,
     fallback_base_url: str,
     model: str,
+    fallback_model: str,
     api_key: str,
+    fallback_api_key: str | None,
     taxonomy_path: Path,
     image_edge: int,
     no_response_format: bool,
@@ -148,7 +150,9 @@ def preflight(
         base_url=base_url,
         fallback_base_url=fallback_base_url,
         model=model,
+        fallback_model=fallback_model,
         api_key=api_key,
+        fallback_api_key=fallback_api_key,
         response_format=not no_response_format,
         temperature=temperature,
         top_p=top_p,
@@ -232,6 +236,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model", default=os.environ.get("MOODTAG_MODEL", DEFAULT_LIVE_MODEL)
     )
+    parser.add_argument(
+        "--fallback-model",
+        default=os.environ.get(
+            "MOODTAG_FALLBACK_MODEL", moodtag.DEFAULT_FALLBACK_MODEL
+        ),
+    )
     parser.add_argument("--discover-models", action="store_true")
     parser.add_argument(
         "--taxonomy",
@@ -292,9 +302,14 @@ def env_float(name: str, default: float) -> float:
 def main() -> int:
     moodtag.load_env_defaults()
     args = parse_args()
-    api_key = os.environ.get("MOODTAG_API_KEY") or os.environ.get("VL_API_KEY")
-    if not api_key:
-        raise SystemExit("MOODTAG_API_KEY or VL_API_KEY is required")
+    primary_api_key = os.environ.get("DASHSCOPE_API_KEY")
+    fallback_api_key = os.environ.get("MOODTAG_API_KEY") or os.environ.get("VL_API_KEY")
+    model_api_key = primary_api_key or fallback_api_key
+    model_base_url = args.base_url if primary_api_key else args.fallback_base_url
+    if not model_api_key:
+        raise SystemExit(
+            "DASHSCOPE_API_KEY, MOODTAG_API_KEY, or VL_API_KEY is required"
+        )
 
     report_dir = Path(args.report_dir)
     client = moodtag.EagleClient(args.eagle_api)
@@ -306,6 +321,7 @@ def main() -> int:
         "base_url": args.base_url,
         "fallback_base_url": args.fallback_base_url,
         "model": args.model,
+        "fallback_model": args.fallback_model,
         "models": [],
         "states": {"initial": initial},
         "runs": [],
@@ -320,7 +336,7 @@ def main() -> int:
     model = args.model
     models: list[str] = []
     if args.discover_models or not model:
-        models = find_models(args.base_url, api_key)
+        models = find_models(model_base_url, model_api_key)
         if not model:
             model = choose_model(models)
     payload["models"] = models
@@ -336,7 +352,7 @@ def main() -> int:
             "MOODTAG_BASE_URL": args.base_url,
             "MOODTAG_FALLBACK_BASE_URL": args.fallback_base_url,
             "MOODTAG_MODEL": model,
-            "MOODTAG_API_KEY": api_key,
+            "MOODTAG_FALLBACK_MODEL": args.fallback_model,
             "MOODTAG_TAXONOMY": args.taxonomy,
             "MOODTAG_IMAGE_EDGE": str(args.image_edge),
             "MOODTAG_TEMPERATURE": str(args.temperature),
@@ -372,7 +388,9 @@ def main() -> int:
             base_url=args.base_url,
             fallback_base_url=args.fallback_base_url,
             model=model,
-            api_key=api_key,
+            fallback_model=args.fallback_model,
+            api_key=primary_api_key,
+            fallback_api_key=fallback_api_key,
             taxonomy_path=Path(args.taxonomy),
             image_edge=args.image_edge,
             no_response_format=args.no_response_format,

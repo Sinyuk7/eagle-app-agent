@@ -104,6 +104,26 @@ External modules should not use or depend on:
 These exist for maintainers, local development, testing, or controlled manual
 operations, not for normal upper-layer integration.
 
+## Maintainer Configuration Guidance
+
+Maintainers should prefer Qwen3.5-class vision-capable models, or stronger
+models, for the configured Moodtag provider chain. The current recommended
+default for both primary and fallback routes is:
+
+```text
+qwen3.5-122b-a10b
+```
+
+This recommendation is based on real folder tagging checks where Qwen3.5-class
+models followed the required JSON contract more reliably for Moodtag writes.
+
+Avoid using speed-first small/flash models such as `qwen3-vl-flash` as the
+default write-path model unless a maintainer has revalidated them against real
+Eagle folders. In live testing, `qwen3-vl-flash` could return malformed or
+unfinished JSON despite JSON mode, which prevents safe tag/annotation writes.
+It may still be useful for explicit experiments, dry runs, or cost-sensitive
+manual testing.
+
 ## Output Expectations
 
 Moodtag writes Eagle annotation as a fixed field block:

@@ -34,15 +34,17 @@ moodtag --help
 Store non-secret defaults with `moodtag config`:
 
 ```sh
-moodtag config set --base-url https://hk.n1n.ai/v1 \
+moodtag config set --base-url https://dashscope.aliyuncs.com/compatible-mode/v1 \
   --fallback-base-url https://api.n1n.ai/v1 \
-  --model Qwen3.5-122B-A10B
+  --model qwen3.5-122b-a10b \
+  --fallback-model qwen3.5-122b-a10b
 ```
 
 Keep API keys in the environment or in a local `.env` file:
 
 ```sh
-export MOODTAG_API_KEY=...
+export DASHSCOPE_API_KEY=...
+export MOODTAG_API_KEY=... # optional relay fallback
 ```
 
 `moodtag` loads `.env` from the current working directory without overriding
@@ -145,10 +147,12 @@ never inside annotation text.
 | Variable | Default | Purpose |
 |---|---|---|
 | `MOODTAG_EAGLE_API` | `http://localhost:41595` | Eagle desktop Web API URL. |
-| `MOODTAG_BASE_URL` | `https://hk.n1n.ai/v1` | OpenAI-compatible vision API base URL. |
-| `MOODTAG_FALLBACK_BASE_URL` | `https://api.n1n.ai/v1` | Optional fallback base URL for retryable provider failures. |
-| `MOODTAG_MODEL` | `Qwen3.5-122B-A10B` | Vision/chat model name. |
-| `MOODTAG_API_KEY` | empty | Vision API key. Required unless `--mock-vl` is used. |
+| `MOODTAG_BASE_URL` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | Primary OpenAI-compatible vision API base URL. |
+| `MOODTAG_FALLBACK_BASE_URL` | `https://api.n1n.ai/v1` | Optional relay fallback base URL for retryable provider failures. |
+| `MOODTAG_MODEL` | `qwen3.5-122b-a10b` | Primary vision/chat model name. |
+| `MOODTAG_FALLBACK_MODEL` | `qwen3.5-122b-a10b` | Optional relay fallback model name. |
+| `DASHSCOPE_API_KEY` | empty | Primary Alibaba Cloud DashScope API key. |
+| `MOODTAG_API_KEY` | empty | Optional relay fallback API key. |
 | `VL_API_KEY` | empty | Backward-compatible fallback API key. |
 | `MOODTAG_TAXONOMY` | bundled default | Optional custom tag taxonomy JSON file. |
 | `MOODTAG_IMAGE_EDGE` | `1024` | Preview image long edge sent to the model. |
@@ -156,8 +160,14 @@ never inside annotation text.
 | `MOODTAG_RETRIES` | `2` | Retry count for model calls. |
 | `MOODTAG_TEMPERATURE` | `0.6` | Model temperature. |
 | `MOODTAG_TOP_P` | `0.85` | Model top-p. |
-| `MOODTAG_MAX_TOKENS` | `1028` | Max output tokens. |
+| `MOODTAG_MAX_TOKENS` | `1028` | Max output tokens. Values below 1028 are rejected. |
 | `MOODTAG_NO_RESPONSE_FORMAT` | `false` | `false` sends JSON Mode. Set `true` only for providers that reject JSON Mode. |
+
+The primary provider uses `DASHSCOPE_API_KEY`. On network errors, HTTP 5xx,
+HTTP 429, or recognizable quota/billing throttling failures, `moodtag` falls
+back to `MOODTAG_FALLBACK_BASE_URL` with `MOODTAG_API_KEY`/`VL_API_KEY`. After a
+primary fallback-class failure, the primary provider is skipped for 1800 seconds
+using a local cache entry under the user cache directory.
 
 Useful single-run flags include `--eagle-api`, `--base-url`,
 `--fallback-base-url`, `--model`, `--taxonomy`, `--image-edge`, `--max-tags`,

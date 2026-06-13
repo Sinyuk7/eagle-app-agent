@@ -18,6 +18,7 @@ from moodtag_core.annotation import build_annotation_block
 from moodtag_core.contract import (
     DEFAULT_BASE_URL,
     DEFAULT_FALLBACK_BASE_URL,
+    DEFAULT_FALLBACK_MODEL,
     DEFAULT_MAX_TOKENS,
     DEFAULT_MODEL,
     DEFAULT_NO_RESPONSE_FORMAT,
@@ -89,6 +90,18 @@ class FakeEagle:
 
 
 class MoodtagTests(unittest.TestCase):
+    def setUp(self):
+        self._provider_state_tmp = tempfile.TemporaryDirectory()
+        provider_state = Path(self._provider_state_tmp.name) / "provider-state.json"
+        self._provider_state_env = mock.patch.dict(
+            os.environ, {"MOODTAG_PROVIDER_STATE": str(provider_state)}, clear=False
+        )
+        self._provider_state_env.start()
+
+    def tearDown(self):
+        self._provider_state_env.stop()
+        self._provider_state_tmp.cleanup()
+
     def test_chat_completions_url_accepts_root_v1_or_full_endpoint(self):
         self.assertEqual(
             moodtag.chat_completions_url("https://api.n1n.ai/"),
@@ -250,7 +263,8 @@ class MoodtagTests(unittest.TestCase):
                 "\n".join(
                     [
                         "export MOODTAG_MODEL='dotenv-model'",
-                        "MOODTAG_API_KEY=dotenv-key",
+                        "DASHSCOPE_API_KEY=dotenv-key",
+                        "MOODTAG_API_KEY=fallback-dotenv-key",
                         "MOODTAG_BASE_URL=https://example.test/v1 # comment",
                     ]
                 ),
@@ -258,12 +272,13 @@ class MoodtagTests(unittest.TestCase):
             )
             with mock.patch.dict(
                 os.environ,
-                {"MOODTAG_API_KEY": "shell-key"},
+                {"DASHSCOPE_API_KEY": "shell-key"},
                 clear=True,
             ):
                 moodtag.load_env_file(env_file)
                 self.assertEqual(os.environ["MOODTAG_MODEL"], "dotenv-model")
-                self.assertEqual(os.environ["MOODTAG_API_KEY"], "shell-key")
+                self.assertEqual(os.environ["DASHSCOPE_API_KEY"], "shell-key")
+                self.assertEqual(os.environ["MOODTAG_API_KEY"], "fallback-dotenv-key")
                 self.assertEqual(
                     os.environ["MOODTAG_BASE_URL"], "https://example.test/v1"
                 )
@@ -274,13 +289,14 @@ class MoodtagTests(unittest.TestCase):
             "MOODTAG_BASE_URL": "https://example.test/v1",
             "MOODTAG_FALLBACK_BASE_URL": "https://fallback.example.test/v1",
             "MOODTAG_MODEL": "vision-model",
+            "MOODTAG_FALLBACK_MODEL": "fallback-vision-model",
             "MOODTAG_TAXONOMY": "custom-taxonomy.json",
             "MOODTAG_IMAGE_EDGE": "512",
             "MOODTAG_MAX_TAGS": "7",
             "MOODTAG_RETRIES": "1",
             "MOODTAG_TEMPERATURE": "0.3",
             "MOODTAG_TOP_P": "0.8",
-            "MOODTAG_MAX_TOKENS": "321",
+            "MOODTAG_MAX_TOKENS": "1200",
             "MOODTAG_NO_RESPONSE_FORMAT": "true",
         }
         with mock.patch.dict(os.environ, env, clear=False):
@@ -290,13 +306,14 @@ class MoodtagTests(unittest.TestCase):
         self.assertEqual(args.base_url, "https://example.test/v1")
         self.assertEqual(args.fallback_base_url, "https://fallback.example.test/v1")
         self.assertEqual(args.model, "vision-model")
+        self.assertEqual(args.fallback_model, "fallback-vision-model")
         self.assertEqual(args.taxonomy, "custom-taxonomy.json")
         self.assertEqual(args.image_edge, 512)
         self.assertEqual(args.max_tags, 7)
         self.assertEqual(args.retries, 1)
         self.assertEqual(args.temperature, 0.3)
         self.assertEqual(args.top_p, 0.8)
-        self.assertEqual(args.max_tokens, 321)
+        self.assertEqual(args.max_tokens, 1200)
         self.assertTrue(args.no_response_format)
 
     def test_user_config_provides_defaults_without_storing_api_key(self):
@@ -305,7 +322,8 @@ class MoodtagTests(unittest.TestCase):
             config_path = root / "config.json"
             env = {
                 "MOODTAG_CONFIG": str(config_path),
-                "MOODTAG_API_KEY": "sk-testSecretShouldNotPersist123456",
+                "DASHSCOPE_API_KEY": "sk-testSecretShouldNotPersist123456",
+                "MOODTAG_API_KEY": "sk-testFallbackSecretShouldNotPersist123456",
             }
             with mock.patch.dict(os.environ, env, clear=True):
                 with chdir(root):
@@ -321,6 +339,8 @@ class MoodtagTests(unittest.TestCase):
                                 "https://fallback.example/v1",
                                 "--model",
                                 "configured-model",
+                                "--fallback-model",
+                                "configured-fallback-model",
                                 "--eagle-api",
                                 "http://localhost:49999",
                             ]
@@ -337,6 +357,7 @@ class MoodtagTests(unittest.TestCase):
                         args.fallback_base_url, "https://fallback.example/v1"
                     )
                     self.assertEqual(args.model, "configured-model")
+                    self.assertEqual(args.fallback_model, "configured-fallback-model")
                     self.assertEqual(args.eagle_api, "http://localhost:49999")
 
                     buffer = io.StringIO()
@@ -345,7 +366,10 @@ class MoodtagTests(unittest.TestCase):
                     self.assertEqual(code, 0)
                     shown = json.loads(buffer.getvalue())
                     self.assertEqual(shown["api_key"], "set")
+                    self.assertEqual(shown["primary_api_key"], "set")
+                    self.assertEqual(shown["fallback_api_key"], "set")
                     self.assertNotIn("sk-testSecret", buffer.getvalue())
+                    self.assertNotIn("sk-testFallback", buffer.getvalue())
 
     def test_environment_overrides_user_config(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -391,11 +415,33 @@ class MoodtagTests(unittest.TestCase):
         self.assertEqual(args.base_url, DEFAULT_BASE_URL)
         self.assertEqual(args.fallback_base_url, DEFAULT_FALLBACK_BASE_URL)
         self.assertEqual(args.model, DEFAULT_MODEL)
+        self.assertEqual(args.fallback_model, DEFAULT_FALLBACK_MODEL)
         self.assertEqual(args.image_edge, moodtag.DEFAULT_IMAGE_EDGE)
         self.assertEqual(args.temperature, DEFAULT_TEMPERATURE)
         self.assertEqual(args.top_p, DEFAULT_TOP_P)
         self.assertEqual(args.max_tokens, DEFAULT_MAX_TOKENS)
         self.assertEqual(args.no_response_format, DEFAULT_NO_RESPONSE_FORMAT)
+
+    def test_parser_rejects_too_small_max_tokens_env(self):
+        with mock.patch.dict(os.environ, {"MOODTAG_MAX_TOKENS": "512"}, clear=True):
+            with self.assertRaisesRegex(moodtag.MoodtagError, "1028"):
+                moodtag.build_parser()
+
+    def test_make_vision_client_uses_primary_and_fallback_api_keys(self):
+        env = {
+            "DASHSCOPE_API_KEY": "sk-testPrimarySecretForMakeClient123456",
+            "MOODTAG_API_KEY": "sk-testFallbackSecretForMakeClient123456",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            parser = moodtag.build_parser()
+            args = parser.parse_args(["tag", "--board", "Board"])
+            client = moodtag.make_vision_client(args)
+        self.assertEqual(client.api_key, "sk-testPrimarySecretForMakeClient123456")
+        self.assertEqual(
+            client.fallback_api_key, "sk-testFallbackSecretForMakeClient123456"
+        )
+        self.assertEqual(client.model, DEFAULT_MODEL)
+        self.assertEqual(client.fallback_model, DEFAULT_FALLBACK_MODEL)
 
     def test_prompt_templates_render_new_json_contract_and_compact_taxonomy(self):
         taxonomy = {"medium": ["photo", "concept art"], "lighting": ["rim light"]}
@@ -883,8 +929,15 @@ class MoodtagTests(unittest.TestCase):
 
         class FallbackHandler(BaseHTTPRequestHandler):
             def do_POST(self):  # noqa: N802 - stdlib callback name
-                requests.append(self.path)
-                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                payload = json.loads(body.decode("utf-8"))
+                requests.append(
+                    {
+                        "path": self.path,
+                        "authorization": self.headers.get("Authorization"),
+                        "model": payload["model"],
+                    }
+                )
                 content = json.dumps(analysis_payload("fallback success"))
                 body = json.dumps({"choices": [{"message": {"content": content}}]})
                 self.send_response(200)
@@ -906,15 +959,250 @@ class MoodtagTests(unittest.TestCase):
                     base_url="http://127.0.0.1:1/v1",
                     fallback_base_url=f"http://127.0.0.1:{server.server_port}/v1",
                     model="vision",
-                    api_key="sk-testSecretForFallback123456",
+                    fallback_model="fallback-vision",
+                    api_key="sk-testPrimarySecretForFallback123456",
+                    fallback_api_key="sk-testFallbackSecretForFallback123456",
                 )
                 result = client.analyze(image, {"medium": ["photo"]}, retries=0)
         finally:
             server.shutdown()
             server.server_close()
 
-        self.assertEqual(requests, ["/v1/chat/completions"])
+        self.assertEqual(
+            requests,
+            [
+                {
+                    "path": "/v1/chat/completions",
+                    "authorization": "Bearer sk-testFallbackSecretForFallback123456",
+                    "model": "fallback-vision",
+                }
+            ],
+        )
         self.assertEqual(result.brief, "fallback success")
+
+    def test_vision_client_fallbacks_on_429_and_sets_cooldown(self):
+        requests = []
+
+        class PrimaryHandler(BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802 - stdlib callback name
+                requests.append(("primary", self.headers.get("Authorization")))
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                self.send_response(429)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    b'{"error":{"code":"Throttling.AllocationQuota","message":"quota"}}'
+                )
+
+            def log_message(self, format, *args):  # noqa: A002 - stdlib signature
+                return
+
+        class FallbackHandler(BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802 - stdlib callback name
+                requests.append(("fallback", self.headers.get("Authorization")))
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                content = json.dumps(analysis_payload("fallback after 429"))
+                body = json.dumps({"choices": [{"message": {"content": content}}]})
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(body.encode("utf-8"))
+
+            def log_message(self, format, *args):  # noqa: A002 - stdlib signature
+                return
+
+        primary = ThreadingHTTPServer(("127.0.0.1", 0), PrimaryHandler)
+        fallback = ThreadingHTTPServer(("127.0.0.1", 0), FallbackHandler)
+        threading.Thread(target=primary.serve_forever, daemon=True).start()
+        threading.Thread(target=fallback.serve_forever, daemon=True).start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                image = Path(tmp) / "image.png"
+                state = Path(tmp) / "provider-state.json"
+                write_png(image)
+                with mock.patch.dict(
+                    os.environ, {"MOODTAG_PROVIDER_STATE": str(state)}, clear=False
+                ):
+                    client = moodtag.VisionClient(
+                        base_url=f"http://127.0.0.1:{primary.server_port}/v1",
+                        fallback_base_url=f"http://127.0.0.1:{fallback.server_port}/v1",
+                        model="vision",
+                        api_key="sk-testPrimarySecretFor429123456",
+                        fallback_api_key="sk-testFallbackSecretFor429123456",
+                    )
+                    result = client.analyze(image, {"medium": ["photo"]}, retries=0)
+                    state_data = json.loads(state.read_text(encoding="utf-8"))
+        finally:
+            primary.shutdown()
+            fallback.shutdown()
+            primary.server_close()
+            fallback.server_close()
+
+        self.assertEqual(result.brief, "fallback after 429")
+        self.assertEqual(
+            requests,
+            [
+                ("primary", "Bearer sk-testPrimarySecretFor429123456"),
+                ("fallback", "Bearer sk-testFallbackSecretFor429123456"),
+            ],
+        )
+        self.assertIn("primary", state_data)
+        self.assertGreater(state_data["primary"]["disabled_until"], 0)
+
+    def test_vision_client_does_not_fallback_on_invalid_parameter(self):
+        requests = []
+
+        class PrimaryHandler(BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802 - stdlib callback name
+                requests.append("primary")
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    b'{"error":{"code":"InvalidParameter","message":"bad request"}}'
+                )
+
+            def log_message(self, format, *args):  # noqa: A002 - stdlib signature
+                return
+
+        primary = ThreadingHTTPServer(("127.0.0.1", 0), PrimaryHandler)
+        threading.Thread(target=primary.serve_forever, daemon=True).start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                image = Path(tmp) / "image.png"
+                state = Path(tmp) / "provider-state.json"
+                write_png(image)
+                with mock.patch.dict(
+                    os.environ, {"MOODTAG_PROVIDER_STATE": str(state)}, clear=False
+                ):
+                    client = moodtag.VisionClient(
+                        base_url=f"http://127.0.0.1:{primary.server_port}/v1",
+                        fallback_base_url="http://127.0.0.1:1/v1",
+                        model="vision",
+                        api_key="sk-testPrimarySecretFor400123456",
+                        fallback_api_key="sk-testFallbackSecretFor400123456",
+                    )
+                    with self.assertRaises(moodtag.ProviderHTTPError):
+                        client.analyze(image, {"medium": ["photo"]}, retries=0)
+        finally:
+            primary.shutdown()
+            primary.server_close()
+
+        self.assertEqual(requests, ["primary"])
+
+    def test_vision_client_skips_primary_during_cooldown(self):
+        requests = []
+
+        class FallbackHandler(BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802 - stdlib callback name
+                requests.append("fallback")
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                content = json.dumps(analysis_payload("cooldown fallback"))
+                body = json.dumps({"choices": [{"message": {"content": content}}]})
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(body.encode("utf-8"))
+
+            def log_message(self, format, *args):  # noqa: A002 - stdlib signature
+                return
+
+        fallback = ThreadingHTTPServer(("127.0.0.1", 0), FallbackHandler)
+        threading.Thread(target=fallback.serve_forever, daemon=True).start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                image = Path(tmp) / "image.png"
+                state = Path(tmp) / "provider-state.json"
+                state.write_text(
+                    json.dumps(
+                        {
+                            "primary": {
+                                "disabled_until": moodtag.time.time() + 1800,
+                                "reason": "test",
+                            }
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                write_png(image)
+                with mock.patch.dict(
+                    os.environ, {"MOODTAG_PROVIDER_STATE": str(state)}, clear=False
+                ):
+                    client = moodtag.VisionClient(
+                        base_url="http://127.0.0.1:1/v1",
+                        fallback_base_url=f"http://127.0.0.1:{fallback.server_port}/v1",
+                        model="vision",
+                        api_key="sk-testPrimarySecretForCooldown123456",
+                        fallback_api_key="sk-testFallbackSecretForCooldown123456",
+                    )
+                    result = client.analyze(image, {"medium": ["photo"]}, retries=0)
+        finally:
+            fallback.shutdown()
+            fallback.server_close()
+
+        self.assertEqual(requests, ["fallback"])
+        self.assertEqual(result.brief, "cooldown fallback")
+
+    def test_vision_client_uses_fallback_when_primary_key_missing(self):
+        requests = []
+
+        class FallbackHandler(BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802 - stdlib callback name
+                requests.append(self.headers.get("Authorization"))
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                content = json.dumps(analysis_payload("missing primary key fallback"))
+                body = json.dumps({"choices": [{"message": {"content": content}}]})
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(body.encode("utf-8"))
+
+            def log_message(self, format, *args):  # noqa: A002 - stdlib signature
+                return
+
+        fallback = ThreadingHTTPServer(("127.0.0.1", 0), FallbackHandler)
+        threading.Thread(target=fallback.serve_forever, daemon=True).start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                image = Path(tmp) / "image.png"
+                state = Path(tmp) / "provider-state.json"
+                write_png(image)
+                with mock.patch.dict(
+                    os.environ, {"MOODTAG_PROVIDER_STATE": str(state)}, clear=False
+                ):
+                    client = moodtag.VisionClient(
+                        base_url="http://127.0.0.1:1/v1",
+                        fallback_base_url=f"http://127.0.0.1:{fallback.server_port}/v1",
+                        model="vision",
+                        api_key=None,
+                        fallback_api_key="sk-testFallbackSecretMissingPrimary123456",
+                    )
+                    result = client.analyze(image, {"medium": ["photo"]}, retries=0)
+        finally:
+            fallback.shutdown()
+            fallback.server_close()
+
+        self.assertEqual(result.brief, "missing primary key fallback")
+        self.assertEqual(requests, ["Bearer sk-testFallbackSecretMissingPrimary123456"])
+
+    def test_vision_client_reports_missing_keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "image.png"
+            state = Path(tmp) / "provider-state.json"
+            write_png(image)
+            with mock.patch.dict(
+                os.environ, {"MOODTAG_PROVIDER_STATE": str(state)}, clear=False
+            ):
+                client = moodtag.VisionClient(
+                    base_url="https://example.test/v1",
+                    fallback_base_url="https://fallback.example.test/v1",
+                    model="vision",
+                    api_key=None,
+                    fallback_api_key=None,
+                )
+                with self.assertRaisesRegex(moodtag.CoreError, "Missing fallback"):
+                    client.analyze(image, {"medium": ["photo"]}, retries=0)
 
 
 def make_fake_eagle(

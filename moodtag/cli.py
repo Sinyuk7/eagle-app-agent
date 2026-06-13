@@ -36,11 +36,13 @@ from moodtag_core.annotation import (
 from moodtag_core.contract import (
     DEFAULT_BASE_URL,
     DEFAULT_FALLBACK_BASE_URL,
+    DEFAULT_FALLBACK_MODEL,
     DEFAULT_MAX_TOKENS,
     DEFAULT_MODEL,
     DEFAULT_NO_RESPONSE_FORMAT,
     DEFAULT_TEMPERATURE,
     DEFAULT_TOP_P,
+    MIN_MAX_TOKENS,
     CoreError,
     MoodtagAnalysis,
 )
@@ -772,12 +774,15 @@ def make_vision_client(args: argparse.Namespace) -> VisionClient | MockVisionCli
     model = args.model or os.environ.get("MOODTAG_MODEL", "") or DEFAULT_MODEL
     if not model:
         raise MoodtagError("Missing model. Pass --model or set MOODTAG_MODEL.")
-    api_key = os.environ.get("MOODTAG_API_KEY") or os.environ.get("VL_API_KEY")
+    api_key = os.environ.get("DASHSCOPE_API_KEY")
+    fallback_api_key = os.environ.get("MOODTAG_API_KEY") or os.environ.get("VL_API_KEY")
     return VisionClient(
         base_url=args.base_url,
         fallback_base_url=args.fallback_base_url,
         model=model,
+        fallback_model=args.fallback_model,
         api_key=api_key,
+        fallback_api_key=fallback_api_key,
         response_format=not args.no_response_format,
         temperature=args.temperature,
         top_p=args.top_p,
@@ -798,8 +803,8 @@ def validate_tag_args(args: argparse.Namespace) -> None:
         raise MoodtagError("--temperature must be at least 0")
     if args.top_p <= 0 or args.top_p > 1:
         raise MoodtagError("--top-p must be greater than 0 and at most 1")
-    if args.max_tokens < 1:
-        raise MoodtagError("--max-tokens must be at least 1")
+    if args.max_tokens < MIN_MAX_TOKENS:
+        raise MoodtagError(f"--max-tokens must be at least {MIN_MAX_TOKENS}")
 
 
 def command_status(args: argparse.Namespace) -> int:
@@ -1174,6 +1179,7 @@ def command_config_set(args: argparse.Namespace) -> int:
         "base_url": args.base_url,
         "fallback_base_url": args.fallback_base_url,
         "model": args.model,
+        "fallback_model": args.fallback_model,
         "eagle_api": args.eagle_api,
     }
     values = {key: value for key, value in values.items() if value}
@@ -1186,11 +1192,15 @@ def command_config_set(args: argparse.Namespace) -> int:
 
 def command_config_show(args: argparse.Namespace) -> int:
     config = load_user_config()
+    primary_api_key_set = bool(os.environ.get("DASHSCOPE_API_KEY"))
+    fallback_api_key_set = bool(
+        os.environ.get("MOODTAG_API_KEY") or os.environ.get("VL_API_KEY")
+    )
     view = public_config_view(
         config,
-        api_key_set=bool(
-            os.environ.get("MOODTAG_API_KEY") or os.environ.get("VL_API_KEY")
-        ),
+        api_key_set=primary_api_key_set or fallback_api_key_set,
+        primary_api_key_set=primary_api_key_set,
+        fallback_api_key_set=fallback_api_key_set,
     )
     if args.json:
         print(json.dumps(view, ensure_ascii=False, sort_keys=True))
@@ -1199,8 +1209,11 @@ def command_config_show(args: argparse.Namespace) -> int:
     print(f"base_url: {view['base_url'] or '-'}")
     print(f"fallback_base_url: {view['fallback_base_url'] or '-'}")
     print(f"model: {view['model'] or '-'}")
+    print(f"fallback_model: {view['fallback_model'] or '-'}")
     print(f"eagle_api: {view['eagle_api'] or '-'}")
     print(f"api_key: {view['api_key']}")
+    print(f"primary_api_key: {view['primary_api_key']}")
+    print(f"fallback_api_key: {view['fallback_api_key']}")
     return 0
 
 
@@ -1248,6 +1261,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=config_value(user_config, "MOODTAG_MODEL", "model", DEFAULT_MODEL),
     )
     tag.add_argument(
+        "--fallback-model",
+        default=config_value(
+            user_config,
+            "MOODTAG_FALLBACK_MODEL",
+            "fallback_model",
+            DEFAULT_FALLBACK_MODEL,
+        ),
+    )
+    tag.add_argument(
         "--taxonomy",
         default=os.environ.get("MOODTAG_TAXONOMY", DEFAULT_TAXONOMY),
     )
@@ -1280,7 +1302,9 @@ def build_parser() -> argparse.ArgumentParser:
     tag.add_argument(
         "--max-tokens",
         type=int,
-        default=env_int("MOODTAG_MAX_TOKENS", DEFAULT_MAX_TOKENS, minimum=1),
+        default=env_int(
+            "MOODTAG_MAX_TOKENS", DEFAULT_MAX_TOKENS, minimum=MIN_MAX_TOKENS
+        ),
     )
     tag.add_argument("--fail-fast", action="store_true")
     tag.add_argument(
@@ -1326,6 +1350,7 @@ def build_parser() -> argparse.ArgumentParser:
     config_set.add_argument("--base-url", default="")
     config_set.add_argument("--fallback-base-url", default="")
     config_set.add_argument("--model", default="")
+    config_set.add_argument("--fallback-model", default="")
     config_set.add_argument("--eagle-api", default="")
     config_set.set_defaults(func=command_config_set)
     config_show = config_sub.add_parser("show", help="Show non-secret user defaults")

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-DEFAULT_BASE_URL = "https://hk.n1n.ai/v1"
+DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DEFAULT_FALLBACK_BASE_URL = "https://api.n1n.ai/v1"
-DEFAULT_MODEL = "Qwen3.5-122B-A10B"
+DEFAULT_MODEL = "qwen3.5-122b-a10b"
+DEFAULT_FALLBACK_MODEL = "qwen3.5-122b-a10b"
+DEFAULT_PROVIDER_COOLDOWN_SECONDS = 1800
 
 DEFAULT_TEMPERATURE = 0.6  ## 你的任务不是 OCR，也不是严格分类，而是“创作素材理解”。因此适度的创造性是有益的。0.6 是一个不错的起点，可以根据实际效果进行微调。
 QUALITY_TOP_P = 0.85
@@ -15,6 +17,7 @@ DEFAULT_TOP_K = 20
 DEFAULT_MIN_P = 0.0
 
 DEFAULT_MAX_TOKENS = 1028
+MIN_MAX_TOKENS = 1028
 
 DEFAULT_PRESENCE_PENALTY = 0.3
 DEFAULT_REPETITION_PENALTY = 1.0

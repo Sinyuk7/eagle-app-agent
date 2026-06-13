@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 CONFIG_ENV = "MOODTAG_CONFIG"
-CONFIG_KEYS = ("base_url", "fallback_base_url", "model", "eagle_api")
+CONFIG_KEYS = ("base_url", "fallback_base_url", "model", "fallback_model", "eagle_api")
 
 
 class ConfigError(RuntimeError):
@@ -71,12 +71,21 @@ def update_user_config(values: dict[str, str]) -> Path:
     return save_user_config(config)
 
 
-def public_config_view(config: dict[str, str], *, api_key_set: bool) -> dict[str, Any]:
+def public_config_view(
+    config: dict[str, str],
+    *,
+    api_key_set: bool,
+    primary_api_key_set: bool = False,
+    fallback_api_key_set: bool = False,
+) -> dict[str, Any]:
     return {
         "config_path": str(config_path()),
         "base_url": config.get("base_url", ""),
         "fallback_base_url": config.get("fallback_base_url", ""),
         "model": config.get("model", ""),
+        "fallback_model": config.get("fallback_model", ""),
         "eagle_api": config.get("eagle_api", ""),
         "api_key": "set" if api_key_set else "unset",
+        "primary_api_key": "set" if primary_api_key_set else "unset",
+        "fallback_api_key": "set" if fallback_api_key_set else "unset",
     }
