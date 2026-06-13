@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import concurrent.futures
 import contextlib
 import json
 import os
@@ -20,7 +21,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from importlib import resources
@@ -65,7 +66,8 @@ from .config import (
 )
 
 DEFAULT_EAGLE_API = "http://localhost:41595"
-DEFAULT_IMAGE_EDGE = 1024
+DEFAULT_IMAGE_EDGE = 768
+DEFAULT_CONCURRENCY = 4
 DEFAULT_MAX_TAGS = 15
 DEFAULT_RETRIES = 2
 DEFAULT_USER_AGENT = "moodtag/0.1"
@@ -152,6 +154,18 @@ class TagRunLog:
                 handle.write(redact(json.dumps(record, ensure_ascii=False)) + "\n")
         except OSError:
             return
+
+
+@dataclass(frozen=True)
+class TagItemResult:
+    index: int
+    item: EagleItem
+    tags: list[str] = field(default_factory=list)
+    annotation: str = ""
+    provider: dict[str, Any] = field(default_factory=dict)
+    provider_attempts: list[dict[str, Any]] = field(default_factory=list)
+    elapsed_ms: int = 0
+    error: Exception | None = None
 
 
 def redact(text: str) -> str:
@@ -1001,6 +1015,8 @@ def validate_tag_args(args: argparse.Namespace) -> None:
     validate_board_scope_args(args)
     if args.image_edge < 256:
         raise MoodtagError("--image-edge must be at least 256")
+    if args.concurrency < 1:
+        raise MoodtagError("--concurrency must be at least 1")
     if args.max_tags < 1:
         raise MoodtagError("--max-tags must be at least 1")
     if args.limit < 0:
@@ -1013,6 +1029,122 @@ def validate_tag_args(args: argparse.Namespace) -> None:
         raise MoodtagError("--top-p must be greater than 0 and at most 1")
     if args.max_tokens < MIN_MAX_TOKENS:
         raise MoodtagError(f"--max-tokens must be at least {MIN_MAX_TOKENS}")
+
+
+def analyze_tag_item(
+    *,
+    index: int,
+    item: EagleItem,
+    eagle: Any,
+    vision: VisionClient | MockVisionClient,
+    taxonomy: dict[str, list[str]],
+    image_edge: int,
+    retries: int,
+    max_tags: int,
+) -> TagItemResult:
+    item_started = time.monotonic()
+    clear_provider_trace(vision)
+    try:
+        thumbnail = eagle.thumbnail_path(item.id)
+        original = locate_original_from_thumbnail(thumbnail, item)
+        with temporary_preview(original, image_edge=image_edge) as preview:
+            result = vision.analyze(
+                preview.path,
+                taxonomy,
+                retries=retries,
+                max_tags=max_tags,
+            )
+        validate_vl_result(result)
+        tags, _rejected = reconcile_tags(result, taxonomy, max_tags=max_tags)
+        return TagItemResult(
+            index=index,
+            item=item,
+            tags=tags,
+            annotation=build_notes_block(result),
+            provider=provider_record(vision),
+            provider_attempts=provider_attempt_records(vision),
+            elapsed_ms=elapsed_ms_since(item_started),
+        )
+    except Exception as exc:  # noqa: BLE001 - per-item isolation
+        return TagItemResult(
+            index=index,
+            item=item,
+            provider=provider_record(vision),
+            provider_attempts=provider_attempt_records(vision),
+            elapsed_ms=elapsed_ms_since(item_started),
+            error=exc,
+        )
+
+
+def run_tag_analysis(
+    *,
+    work_items: list[tuple[int, EagleItem]],
+    eagle: Any,
+    vision: VisionClient | MockVisionClient,
+    vision_factory: Callable[[], VisionClient | MockVisionClient] | None = None,
+    taxonomy: dict[str, list[str]],
+    image_edge: int,
+    retries: int,
+    max_tags: int,
+    concurrency: int,
+) -> Iterator[TagItemResult]:
+    if concurrency <= 1 or len(work_items) <= 1:
+        for index, item in work_items:
+            yield analyze_tag_item(
+                index=index,
+                item=item,
+                eagle=eagle,
+                vision=vision,
+                taxonomy=taxonomy,
+                image_edge=image_edge,
+                retries=retries,
+                max_tags=max_tags,
+            )
+        return
+
+    workers = min(concurrency, len(work_items))
+    futures: dict[concurrent.futures.Future[TagItemResult], int] = {}
+    buffered: dict[int, TagItemResult] = {}
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+    next_submit = 0
+    next_yield = 0
+
+    def submit_ready() -> None:
+        nonlocal next_submit
+        while next_submit < len(work_items) and len(futures) < workers:
+            index, item = work_items[next_submit]
+            worker_vision = vision_factory() if vision_factory is not None else vision
+            future = executor.submit(
+                analyze_tag_item,
+                index=index,
+                item=item,
+                eagle=eagle,
+                vision=worker_vision,
+                taxonomy=taxonomy,
+                image_edge=image_edge,
+                retries=retries,
+                max_tags=max_tags,
+            )
+            futures[future] = next_submit
+            next_submit += 1
+
+    try:
+        submit_ready()
+        while next_yield < len(work_items):
+            if next_yield not in buffered:
+                done, _pending = concurrent.futures.wait(
+                    futures,
+                    return_when=concurrent.futures.FIRST_COMPLETED,
+                )
+                for future in done:
+                    work_index = futures.pop(future)
+                    buffered[work_index] = future.result()
+                submit_ready()
+            while next_yield in buffered:
+                yield buffered.pop(next_yield)
+                next_yield += 1
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def command_status(args: argparse.Namespace) -> int:
@@ -1327,6 +1459,10 @@ def provider_plan_records(vision: Any) -> list[dict[str, Any]]:
 
 def provider_summary(vision: Any) -> str:
     record = provider_record(vision)
+    return provider_record_summary(record)
+
+
+def provider_record_summary(record: dict[str, Any]) -> str:
     if not record:
         return "provider=unknown"
     return (
@@ -1425,6 +1561,7 @@ def command_tag(args: argparse.Namespace) -> int:
         recursive=not args.no_recursive,
         max_board_items=args.max_board_items,
         image_edge=args.image_edge,
+        concurrency=args.concurrency,
         max_tags=args.max_tags,
         retries=args.retries,
         provider_plan=provider_plan_records(vision),
@@ -1441,6 +1578,8 @@ def command_tag(args: argparse.Namespace) -> int:
     changed = 0
     failed = 0
     skipped = 0
+    total = len(items)
+    action = "write" if args.write else "dry-run"
     run_log.write(
         "board_loaded",
         board={"id": board.id, "path": board.path, "name": board.name},
@@ -1453,73 +1592,111 @@ def command_tag(args: argparse.Namespace) -> int:
             }
             for folder in scope.folders
         ],
-        items=len(items),
+        items=total,
     )
 
+    def handle_result(result: TagItemResult) -> tuple[int, int]:
+        if result.error is not None:
+            print(
+                f"[{result.index}/{total}] failed\t{result.item.id}\t"
+                f"{redact(str(result.error))}"
+            )
+            run_log.write(
+                "item_failed",
+                item=item_log_record(result.item, index=result.index, total=total),
+                error=redact(str(result.error)),
+                provider_attempts=result.provider_attempts,
+                elapsed_ms=result.elapsed_ms,
+            )
+            if args.fail_fast:
+                raise result.error
+            return 0, 1
+
+        if args.write:
+            try:
+                eagle.update_item(
+                    result.item.id,
+                    tags=result.tags,
+                    annotation=result.annotation,
+                )
+            except Exception as exc:  # noqa: BLE001 - per-item isolation
+                print(
+                    f"[{result.index}/{total}] failed\t{result.item.id}\t"
+                    f"{redact(str(exc))}"
+                )
+                run_log.write(
+                    "item_failed",
+                    item=item_log_record(result.item, index=result.index, total=total),
+                    error=redact(str(exc)),
+                    provider=result.provider,
+                    provider_attempts=result.provider_attempts,
+                    elapsed_ms=result.elapsed_ms,
+                )
+                if args.fail_fast:
+                    raise
+                return 0, 1
+            run_log.write(
+                "item_written",
+                item=item_log_record(result.item, index=result.index, total=total),
+                tags=result.tags,
+                annotation_chars=len(result.annotation),
+            )
+
+        provider = provider_record_summary(result.provider)
+        print(
+            f"[{result.index}/{total}] {action}\t{result.item.id}\t"
+            f"{result.item.name}\t{len(result.tags)} tags\t{provider}"
+        )
+        run_log.write(
+            "item_completed",
+            item=item_log_record(result.item, index=result.index, total=total),
+            action=action,
+            changed=True,
+            tags=result.tags,
+            tag_count=len(result.tags),
+            provider=result.provider,
+            provider_attempts=result.provider_attempts,
+            elapsed_ms=result.elapsed_ms,
+        )
+        return 1, 0
+
+    work_items: list[tuple[int, EagleItem]] = []
+    skipped_indexes: set[int] = set()
     for index, item in enumerate(items, start=1):
         if has_moodboard_notes(item.annotation) and not args.force:
             skipped += 1
-            print(f"[{index}/{len(items)}] skip\t{item.id}\t{item.name}")
+            skipped_indexes.add(index)
+        else:
+            work_items.append((index, item))
+
+    results = run_tag_analysis(
+        work_items=work_items,
+        eagle=eagle,
+        vision=vision,
+        vision_factory=(
+            lambda: public_attr("make_vision_client")(args)
+            if args.concurrency > 1
+            else None
+        ),
+        taxonomy=taxonomy,
+        image_edge=args.image_edge,
+        retries=args.retries,
+        max_tags=args.max_tags,
+        concurrency=args.concurrency,
+    )
+    result_iter = iter(results)
+    for index, item in enumerate(items, start=1):
+        if index in skipped_indexes:
+            print(f"[{index}/{total}] skip\t{item.id}\t{item.name}")
             run_log.write(
                 "item_skipped",
-                item=item_log_record(item, index=index, total=len(items)),
+                item=item_log_record(item, index=index, total=total),
                 reason="already processed",
             )
             continue
-        item_started = time.monotonic()
-        clear_provider_trace(vision)
-        try:
-            thumbnail = eagle.thumbnail_path(item.id)
-            original = locate_original_from_thumbnail(thumbnail, item)
-            with temporary_preview(original, image_edge=args.image_edge) as preview:
-                result = vision.analyze(
-                    preview.path,
-                    taxonomy,
-                    retries=args.retries,
-                    max_tags=args.max_tags,
-                )
-            validate_vl_result(result)
-            tags, _rejected = reconcile_tags(result, taxonomy, max_tags=args.max_tags)
-            notes = build_notes_block(result)
-            annotation = notes
-            changed += 1
-            action = "write" if args.write else "dry-run"
-            provider = provider_summary(vision)
-            print(
-                f"[{index}/{len(items)}] {action}\t{item.id}\t"
-                f"{item.name}\t{len(tags)} tags\t{provider}"
-            )
-            run_log.write(
-                "item_completed",
-                item=item_log_record(item, index=index, total=len(items)),
-                action=action,
-                changed=True,
-                tags=tags,
-                tag_count=len(tags),
-                provider=provider_record(vision),
-                provider_attempts=provider_attempt_records(vision),
-                elapsed_ms=elapsed_ms_since(item_started),
-            )
-            if args.write:
-                eagle.update_item(item.id, tags=tags, annotation=annotation)
-                run_log.write(
-                    "item_written",
-                    item=item_log_record(item, index=index, total=len(items)),
-                    tags=tags,
-                    annotation_chars=len(annotation),
-                )
-        except Exception as exc:  # noqa: BLE001 - per-item isolation
-            failed += 1
-            print(f"[{index}/{len(items)}] failed\t{item.id}\t{redact(str(exc))}")
-            run_log.write(
-                "item_failed",
-                item=item_log_record(item, index=index, total=len(items)),
-                error=redact(str(exc)),
-                provider_attempts=provider_attempt_records(vision),
-                elapsed_ms=elapsed_ms_since(item_started),
-            )
-            if args.fail_fast:
-                raise
+        result_changed, result_failed = handle_result(next(result_iter))
+        changed += result_changed
+        failed += result_failed
 
     if not args.write:
         print("Dry run only. Re-run with --write to update Eagle.")
@@ -1747,6 +1924,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--image-edge",
         type=int,
         default=env_int("MOODTAG_IMAGE_EDGE", DEFAULT_IMAGE_EDGE, minimum=256),
+    )
+    tag.add_argument(
+        "--concurrency",
+        type=int,
+        default=env_int("MOODTAG_CONCURRENCY", DEFAULT_CONCURRENCY, minimum=1),
+        help="Number of image analysis requests to run in parallel",
     )
     tag.add_argument(
         "--max-tags",

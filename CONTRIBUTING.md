@@ -94,7 +94,8 @@ Configuration precedence is:
 | `MOODTAG_API_KEY` | empty | Optional relay fallback API key. |
 | `VL_API_KEY` | empty | Backward-compatible fallback API key. |
 | `MOODTAG_TAXONOMY` | bundled default | Optional custom tag taxonomy JSON file. |
-| `MOODTAG_IMAGE_EDGE` | `1024` | Preview image long edge sent to the model. |
+| `MOODTAG_IMAGE_EDGE` | `768` | Preview image long edge sent to the model. |
+| `MOODTAG_CONCURRENCY` | `4` | Number of image analysis requests to run in parallel. |
 | `MOODTAG_MAX_TAGS` | `15` | Maximum Eagle tags written per item. |
 | `MOODTAG_RETRIES` | `2` | Retry count for model calls. |
 | `MOODTAG_TEMPERATURE` | `0.6` | Model temperature. |
@@ -105,8 +106,8 @@ Configuration precedence is:
 | `MOODTAG_NO_RESPONSE_FORMAT` | `false` | `false` sends JSON Mode. Set `true` only for providers that reject JSON Mode. |
 
 Useful single-run flags include `--eagle-api`, `--base-url`,
-`--fallback-base-url`, `--model`, `--taxonomy`, `--image-edge`, `--max-tags`,
-`--limit`, `--retries`, `--temperature`, `--top-p`, `--max-tokens`,
+`--fallback-base-url`, `--model`, `--taxonomy`, `--image-edge`, `--concurrency`,
+`--max-tags`, `--limit`, `--retries`, `--temperature`, `--top-p`, `--max-tokens`,
 `--response-format`, and `--no-response-format`.
 
 ## Provider Guidance

@@ -94,6 +94,31 @@ class FakeEagle:
     def update_item(self, item_id, *, tags, annotation):
         self.updated.append((item_id, list(tags), annotation))
 
+        def update_items(items):
+            return [
+                moodtag.EagleItem(
+                    id=item.id,
+                    name=item.name,
+                    ext=item.ext,
+                    tags=list(tags),
+                    folders=item.folders,
+                    annotation=annotation,
+                    width=item.width,
+                    height=item.height,
+                    size=item.size,
+                    palettes=item.palettes,
+                )
+                if item.id == item_id
+                else item
+                for item in items
+            ]
+
+        self.items = update_items(self.items)
+        self.items_by_folder = {
+            folder_id: update_items(items)
+            for folder_id, items in self.items_by_folder.items()
+        }
+
 
 class MoodtagTests(unittest.TestCase):
     def setUp(self):
@@ -256,6 +281,18 @@ class MoodtagTests(unittest.TestCase):
                 )
         self.assertEqual(code, 2)
         self.assertIn("--image-edge", stderr.getvalue())
+
+    def test_invalid_concurrency_short_circuit_before_eagle(self):
+        stderr = io.StringIO()
+        with mock.patch.object(
+            moodtag, "EagleClient", side_effect=AssertionError("should not touch Eagle")
+        ):
+            with redirect_stderr(stderr), redirect_stdout(io.StringIO()):
+                code = moodtag.main(
+                    ["tag", "--board", "Board", "--mock-vl", "--concurrency", "0"]
+                )
+        self.assertEqual(code, 2)
+        self.assertIn("--concurrency", stderr.getvalue())
 
     def test_validate_vl_result_rejects_empty_result(self):
         with self.assertRaisesRegex(moodtag.MoodtagError, "brief"):
@@ -430,10 +467,17 @@ class MoodtagTests(unittest.TestCase):
         self.assertEqual(args.model, DEFAULT_MODEL)
         self.assertEqual(args.fallback_model, DEFAULT_FALLBACK_MODEL)
         self.assertEqual(args.image_edge, moodtag.DEFAULT_IMAGE_EDGE)
+        self.assertEqual(args.concurrency, moodtag.DEFAULT_CONCURRENCY)
         self.assertEqual(args.temperature, DEFAULT_TEMPERATURE)
         self.assertEqual(args.top_p, DEFAULT_TOP_P)
         self.assertEqual(args.max_tokens, DEFAULT_MAX_TOKENS)
         self.assertEqual(args.no_response_format, DEFAULT_NO_RESPONSE_FORMAT)
+
+    def test_concurrency_env_sets_parser_default(self):
+        with mock.patch.dict(os.environ, {"MOODTAG_CONCURRENCY": "4"}, clear=True):
+            parser = moodtag.build_parser()
+            args = parser.parse_args(["tag", "--board", "Board"])
+        self.assertEqual(args.concurrency, 4)
 
     def test_parser_rejects_too_small_max_tokens_env(self):
         with mock.patch.dict(os.environ, {"MOODTAG_MAX_TOKENS": "512"}, clear=True):
@@ -871,6 +915,90 @@ class MoodtagTests(unittest.TestCase):
             tmp.cleanup()
         self.assertEqual(code, 0)
         self.assertEqual([item_id for item_id, _, _ in fake.updated], ["I1"])
+
+    def test_tag_concurrency_preserves_write_order(self):
+        class DelayedVision:
+            def analyze(self, image, taxonomy, retries, max_tags=15):
+                if image.name == "pending.png":
+                    moodtag.time.sleep(0.05)
+                    brief = "first"
+                else:
+                    brief = "second"
+                return moodtag.normalize_vl_result(
+                    analysis_payload(brief=brief),
+                    taxonomy=taxonomy,
+                    max_tags=max_tags,
+                )
+
+        @contextmanager
+        def source_preview(source, *, image_edge):
+            del image_edge
+            yield moodtag.Preview(source, source, 1, 1, 1, 1)
+
+        fake, tmp = make_fake_eagle(pending_count=2)
+        argv = [
+            "tag",
+            "--board",
+            "Board",
+            "--write",
+            "--limit",
+            "2",
+            "--concurrency",
+            "2",
+        ]
+        try:
+            with mock.patch.object(moodtag, "EagleClient", return_value=fake):
+                with mock.patch.object(
+                    moodtag, "make_vision_client", return_value=DelayedVision()
+                ):
+                    with mock.patch("moodtag.cli.temporary_preview", source_preview):
+                        with redirect_stdout(io.StringIO()):
+                            code = moodtag.main(argv)
+        finally:
+            tmp.cleanup()
+        self.assertEqual(code, 0)
+        self.assertEqual([item_id for item_id, _, _ in fake.updated], ["I1", "I3"])
+        self.assertIn("Brief: first", fake.updated[0][2])
+        self.assertIn("Brief: second", fake.updated[1][2])
+
+    def test_tag_resume_skips_items_written_by_partial_run(self):
+        fake, tmp = make_fake_eagle(pending_count=3)
+        try:
+            with mock.patch.object(moodtag, "EagleClient", return_value=fake):
+                with redirect_stdout(io.StringIO()):
+                    first_code = moodtag.main(
+                        [
+                            "tag",
+                            "--board",
+                            "Board",
+                            "--mock-vl",
+                            "--write",
+                            "--limit",
+                            "2",
+                            "--concurrency",
+                            "4",
+                        ]
+                    )
+                with redirect_stdout(io.StringIO()):
+                    second_code = moodtag.main(
+                        [
+                            "tag",
+                            "--board",
+                            "Board",
+                            "--mock-vl",
+                            "--write",
+                            "--concurrency",
+                            "4",
+                        ]
+                    )
+        finally:
+            tmp.cleanup()
+        self.assertEqual(first_code, 0)
+        self.assertEqual(second_code, 0)
+        self.assertEqual(
+            [item_id for item_id, _, _ in fake.updated],
+            ["I1", "I3", "I4"],
+        )
 
     def test_brief_prints_stdout_without_secret_or_base64(self):
         fake, tmp = make_fake_eagle()
@@ -1391,15 +1519,19 @@ def make_fake_eagle(
     i1 = root / "I1.info"
     i2 = root / "I2.info"
     i3 = root / "I3.info"
+    i4 = root / "I4.info"
     i1.mkdir()
     i2.mkdir()
     i3.mkdir()
+    i4.mkdir()
     write_png(i1 / "pending.png")
     write_png(i1 / "pending_thumbnail.png")
     write_png(i2 / "processed.png")
     write_png(i2 / "processed_thumbnail.png")
     write_png(i3 / "pending-extra.png")
     write_png(i3 / "pending-extra_thumbnail.png")
+    write_png(i4 / "pending-third.png")
+    write_png(i4 / "pending-third_thumbnail.png")
     pending_items = [
         moodtag.EagleItem(
             id="I1",
@@ -1415,6 +1547,17 @@ def make_fake_eagle(
             moodtag.EagleItem(
                 id="I3",
                 name="pending-extra",
+                ext="png",
+                tags=[],
+                folders=["B1"],
+                annotation="",
+            )
+        )
+    if pending_count > 2:
+        pending_items.append(
+            moodtag.EagleItem(
+                id="I4",
+                name="pending-third",
                 ext="png",
                 tags=[],
                 folders=["B1"],
@@ -1449,6 +1592,7 @@ def make_fake_eagle(
             "I1": i1 / "pending_thumbnail.png",
             "I2": i2 / "processed_thumbnail.png",
             "I3": i3 / "pending-extra_thumbnail.png",
+            "I4": i4 / "pending-third_thumbnail.png",
         },
     )
     return fake, tmp

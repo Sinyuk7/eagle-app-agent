@@ -66,6 +66,12 @@ moodtag tag --board 'MQBUH98ILYTQ0'
 moodtag tag --board 'MQBUH98ILYTQ0' --write
 ```
 
+并发处理图片分析：
+
+```sh
+moodtag tag --board 'MQBUH98ILYTQ0' --write --concurrency 4
+```
+
 导出文件夹上下文为 Markdown：
 
 ```sh
@@ -87,6 +93,8 @@ moodtag tag --board 'MQBUH98ILYTQ0' --max-board-items 500 --write
 只处理当前文件夹、不包含子文件夹时加 `--no-recursive`。
 
 `moodtag tag` 每次都会在终端输出本次 provider plan、每张图片实际命中的 provider/model/host，并默认写入 JSONL 运行日志。日志默认位于 `~/.cache/moodtag/runs`，保留最近 50 个 `moodtag-*.jsonl` 文件。
+
+默认发送给模型的预览图长边是 `768px`。需要更高细节时可以传 `--image-edge 1024`。
 
 只处理一小批图片：
 
