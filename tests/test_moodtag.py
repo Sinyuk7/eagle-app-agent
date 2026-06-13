@@ -225,7 +225,7 @@ class MoodtagTests(unittest.TestCase):
             del method, kwargs
             return responses[url]
 
-        with mock.patch.object(moodtag, "http_request", side_effect=fake_http_request):
+        with mock.patch("moodtag.cli.http_request", side_effect=fake_http_request):
             boards = moodtag.EagleClient().boards()
 
         self.assertEqual(
