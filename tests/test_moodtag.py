@@ -93,15 +93,22 @@ class FakeEagle:
 class MoodtagTests(unittest.TestCase):
     def setUp(self):
         self._provider_state_tmp = tempfile.TemporaryDirectory()
+        self._log_tmp = tempfile.TemporaryDirectory()
         provider_state = Path(self._provider_state_tmp.name) / "provider-state.json"
         self._provider_state_env = mock.patch.dict(
-            os.environ, {"MOODTAG_PROVIDER_STATE": str(provider_state)}, clear=False
+            os.environ,
+            {
+                "MOODTAG_PROVIDER_STATE": str(provider_state),
+                "MOODTAG_LOG_DIR": self._log_tmp.name,
+            },
+            clear=False,
         )
         self._provider_state_env.start()
 
     def tearDown(self):
         self._provider_state_env.stop()
         self._provider_state_tmp.cleanup()
+        self._log_tmp.cleanup()
 
     def test_chat_completions_url_accepts_root_v1_or_full_endpoint(self):
         self.assertEqual(
@@ -444,6 +451,47 @@ class MoodtagTests(unittest.TestCase):
         self.assertEqual(client.model, DEFAULT_MODEL)
         self.assertEqual(client.fallback_model, DEFAULT_FALLBACK_MODEL)
 
+    def test_tag_run_log_prunes_old_logs_by_recent_mtime(self):
+        root = Path(self._log_tmp.name)
+        old_paths = []
+        for index in range(3):
+            path = root / f"moodtag-old-{index}.jsonl"
+            path.write_text("{}\n", encoding="utf-8")
+            timestamp = 1000 + index
+            os.utime(path, (timestamp, timestamp))
+            old_paths.append(path)
+
+        moodtag.make_tag_run_log(keep=2)
+
+        remaining = {path.name for path in root.glob("moodtag-*.jsonl")}
+        self.assertNotIn(old_paths[0].name, remaining)
+        self.assertEqual(len(remaining), 2)
+
+    def test_tag_run_log_keep_uses_environment_default(self):
+        root = Path(self._log_tmp.name)
+        for index in range(3):
+            path = root / f"moodtag-env-{index}.jsonl"
+            path.write_text("{}\n", encoding="utf-8")
+            os.utime(path, (1000 + index, 1000 + index))
+
+        with mock.patch.dict(os.environ, {"MOODTAG_LOG_KEEP": "1"}, clear=False):
+            moodtag.make_tag_run_log()
+
+        remaining = list(root.glob("moodtag-*.jsonl"))
+        self.assertEqual(len(remaining), 1)
+
+    def test_provider_display_host_omits_url_path_for_stdout(self):
+        self.assertEqual(
+            moodtag.provider_display_host(
+                "https://dashscope.aliyuncs.com/compatible-mode/v1"
+            ),
+            "dashscope.aliyuncs.com",
+        )
+        self.assertEqual(
+            moodtag.provider_display_host("https://api.n1n.ai/v1"),
+            "api.n1n.ai",
+        )
+
     def test_prompt_templates_render_new_json_contract_and_compact_taxonomy(self):
         taxonomy = {"medium": ["photo", "concept art"], "lighting": ["rim light"]}
         system_prompt = read_system_prompt()
@@ -599,14 +647,34 @@ class MoodtagTests(unittest.TestCase):
     def test_tag_dry_run_does_not_update_eagle(self):
         fake, tmp = make_fake_eagle()
         argv = ["tag", "--board", "Board", "--mock-vl", "--limit", "1"]
+        buffer = io.StringIO()
         try:
             with mock.patch.object(moodtag, "EagleClient", return_value=fake):
-                with redirect_stdout(io.StringIO()):
+                with redirect_stdout(buffer):
                     code = moodtag.main(argv)
         finally:
             tmp.cleanup()
         self.assertEqual(code, 0)
         self.assertEqual(fake.updated, [])
+        output = buffer.getvalue()
+        self.assertIn("Log: ", output)
+        self.assertIn(f"Provider plan: mock({DEFAULT_MODEL} @ local, key=set)", output)
+        self.assertIn(f"provider=mock model={DEFAULT_MODEL} host=local", output)
+        logs = sorted(Path(self._log_tmp.name).glob("moodtag-*.jsonl"))
+        self.assertEqual(len(logs), 1)
+        records = [
+            json.loads(line)
+            for line in logs[0].read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        self.assertEqual(records[0]["event"], "run_start")
+        completed = [
+            record for record in records if record["event"] == "item_completed"
+        ]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0]["provider"]["name"], "mock")
+        self.assertEqual(completed[0]["provider_attempts"][0]["ok"], True)
+        self.assertFalse(fake.updated)
 
     def test_tag_empty_vl_result_fails_without_write(self):
         class EmptyVision:
@@ -980,6 +1048,11 @@ class MoodtagTests(unittest.TestCase):
             ],
         )
         self.assertEqual(result.brief, "fallback success")
+        self.assertEqual(client.last_provider_name, "fallback")
+        self.assertEqual(client.last_provider_model, "fallback-vision")
+        self.assertEqual(len(client.last_provider_attempts), 2)
+        self.assertFalse(client.last_provider_attempts[0].ok)
+        self.assertTrue(client.last_provider_attempts[1].ok)
 
     def test_vision_client_fallbacks_on_429_and_sets_cooldown(self):
         requests = []

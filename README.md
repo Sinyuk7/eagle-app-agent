@@ -78,6 +78,8 @@ moodtag export-context --board 'MQBUH98ILYTQ0' --output context.md
 
 `moodtag tag --write` 会覆盖被处理图片的 Eagle `tags` 和 `annotation`，不会和原有元数据合并。
 
+`moodtag tag` 每次都会在终端输出本次 provider plan、每张图片实际命中的 provider/model/host，并默认写入 JSONL 运行日志。日志默认位于 `~/.cache/moodtag/runs`，保留最近 50 个 `moodtag-*.jsonl` 文件。
+
 只处理一小批图片：
 
 ```sh

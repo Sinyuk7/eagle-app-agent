@@ -18,8 +18,10 @@ import time  # noqa: F401 - public compatibility for tests and external patching
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -49,6 +51,9 @@ from moodtag_core.contract import (
 from moodtag_core.provider import (
     VisionClient as CoreVisionClient,
 )
+from moodtag_core.provider import (
+    elapsed_ms_since,
+)
 from moodtag_core.response import normalize_analysis_json, parse_analysis_response
 
 from .config import (
@@ -64,6 +69,7 @@ DEFAULT_MAX_TAGS = 15
 DEFAULT_RETRIES = 2
 DEFAULT_USER_AGENT = "moodtag/0.1"
 DEFAULT_TAXONOMY = "default"
+DEFAULT_LOG_KEEP = 50
 LEGACY_DEFAULT_TAXONOMY_PATHS = {"taxonomy/default.json", "./taxonomy/default.json"}
 SUPPORTED_ORIGINAL_EXTS = {
     ".jpg",
@@ -114,8 +120,88 @@ class Preview:
     mimetype: str = "image/jpeg"
 
 
+class TagRunLog:
+    def __init__(self, path: Path, run_id: str) -> None:
+        self.path = path
+        self.run_id = run_id
+
+    def write(self, event: str, **payload: Any) -> None:
+        record = {
+            "ts": datetime.now(UTC).isoformat(timespec="milliseconds"),
+            "run_id": self.run_id,
+            "event": event,
+            **payload,
+        }
+        try:
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(redact(json.dumps(record, ensure_ascii=False)) + "\n")
+        except OSError:
+            return
+
+
 def redact(text: str) -> str:
     return re.sub(r"\bsk-[A-Za-z0-9_\-]{8,}\b", "sk-REDACTED", str(text))
+
+
+def log_root() -> Path:
+    override = os.environ.get("MOODTAG_LOG_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+    xdg_home = os.environ.get("XDG_CACHE_HOME", "").strip()
+    root = Path(xdg_home).expanduser() if xdg_home else Path.home() / ".cache"
+    return root / "moodtag" / "runs"
+
+
+def make_tag_run_log(*, keep: int = DEFAULT_LOG_KEEP) -> TagRunLog:
+    root = log_root()
+    keep = log_keep(default=keep)
+    run_id = uuid.uuid4().hex[:12]
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = root / f"moodtag-{stamp}-{run_id}.jsonl"
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        prune_old_logs(root, keep=keep - 1)
+        path.touch(exist_ok=False)
+    except OSError:
+        path = Path(os.devnull)
+    return TagRunLog(path, run_id)
+
+
+def log_keep(*, default: int = DEFAULT_LOG_KEEP) -> int:
+    raw = os.environ.get("MOODTAG_LOG_KEEP", "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(1, value)
+
+
+def prune_old_logs(root: Path, *, keep: int) -> None:
+    if keep < 0:
+        keep = 0
+    try:
+        logs = [
+            path
+            for path in root.glob("moodtag-*.jsonl")
+            if path.is_file() and path.name.startswith("moodtag-")
+        ]
+    except OSError:
+        return
+    logs.sort(key=lambda path: (safe_mtime(path), path.name), reverse=True)
+    for path in logs[keep:]:
+        try:
+            path.unlink()
+        except OSError:
+            continue
+
+
+def safe_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def url_join(base: str, path: str) -> str:
@@ -672,6 +758,10 @@ class VisionClient(CoreVisionClient):
 class MockVisionClient:
     def __init__(self, model: str = "mock-vision") -> None:
         self.model = model
+        self.last_provider_name = "mock"
+        self.last_provider_base_url = "mock://local"
+        self.last_provider_model = model
+        self.last_provider_attempts: list[Any] = []
 
     def analyze(
         self,
@@ -682,7 +772,7 @@ class MockVisionClient:
     ) -> MoodtagAnalysis:
         del image, retries
         first_tags = [tags[0] for _, tags in list(taxonomy.items())[:3] if tags]
-        return normalize_analysis_json(
+        result = normalize_analysis_json(
             {
                 "brief": "模拟角色站在简洁背景前，身穿测试服并佩戴基础道具。",
                 "elements": ["模拟角色", "测试服", "基础道具", "简洁背景", "中性配色"],
@@ -696,6 +786,21 @@ class MockVisionClient:
             taxonomy=taxonomy,
             max_tags=max_tags,
         )
+        self.last_provider_name = "mock"
+        self.last_provider_base_url = "mock://local"
+        self.last_provider_model = self.model
+        self.last_provider_attempts = [
+            {
+                "name": "mock",
+                "base_url": "mock://local",
+                "model": self.model,
+                "ok": True,
+                "elapsed_ms": 0,
+                "status": None,
+                "error": "",
+            }
+        ]
+        return result
 
 
 def file_to_data_url(path: Path, mimetype: str) -> str:
@@ -1036,11 +1141,165 @@ def command_export_context(args: argparse.Namespace) -> int:
     return 0
 
 
+def format_provider_plan(vision: Any) -> str:
+    records = provider_plan_records(vision)
+    if not records:
+        return "unavailable"
+    return " -> ".join(
+        (
+            f"{record['name']}{provider_plan_status(record)}"
+            f"({record['model']} @ {provider_display_host(record['base_url'])}, "
+            f"key={record['api_key']})"
+        )
+        for record in records
+    )
+
+
+def provider_display_host(base_url: str) -> str:
+    parts = urllib.parse.urlsplit(str(base_url or ""))
+    if parts.netloc:
+        return parts.netloc
+    return str(base_url or "")
+
+
+def provider_plan_status(record: dict[str, Any]) -> str:
+    if record.get("active", True):
+        return ""
+    reason = record.get("skip_reason") or "inactive"
+    return f"[skip:{reason}]"
+
+
+def provider_plan_records(vision: Any) -> list[dict[str, Any]]:
+    endpoints = getattr(vision, "endpoints", None)
+    if callable(endpoints):
+        active_keys = {
+            (endpoint.name, endpoint.base_url, endpoint.model)
+            for endpoint in endpoints(include_cooldown=True)
+        }
+        return [
+            {
+                "name": endpoint.name,
+                "base_url": endpoint.base_url,
+                "model": endpoint.model,
+                "api_key": "set" if endpoint.api_key else "unset",
+                "active": (endpoint.name, endpoint.base_url, endpoint.model)
+                in active_keys,
+                "skip_reason": "cooldown"
+                if (endpoint.name, endpoint.base_url, endpoint.model) not in active_keys
+                else "",
+            }
+            for endpoint in endpoints(include_cooldown=False)
+        ]
+    name = str(getattr(vision, "last_provider_name", "") or "mock")
+    base_url = str(getattr(vision, "last_provider_base_url", "") or "mock://local")
+    model = str(
+        getattr(vision, "last_provider_model", "") or getattr(vision, "model", "")
+    )
+    return [
+        {
+            "name": name,
+            "base_url": base_url,
+            "model": model,
+            "api_key": "set",
+            "active": True,
+            "skip_reason": "",
+        }
+    ]
+
+
+def provider_summary(vision: Any) -> str:
+    record = provider_record(vision)
+    if not record:
+        return "provider=unknown"
+    return (
+        f"provider={record['name']} model={record['model']} "
+        f"host={provider_display_host(record['base_url'])}"
+    )
+
+
+def provider_record(vision: Any) -> dict[str, Any]:
+    name = str(getattr(vision, "last_provider_name", "") or "")
+    base_url = str(getattr(vision, "last_provider_base_url", "") or "")
+    model = str(getattr(vision, "last_provider_model", "") or "")
+    if not name and not base_url and not model:
+        return {}
+    return {"name": name, "base_url": base_url, "model": model}
+
+
+def provider_attempt_records(vision: Any) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for attempt in getattr(vision, "last_provider_attempts", []) or []:
+        if isinstance(attempt, dict):
+            records.append(
+                {
+                    "name": attempt.get("name", ""),
+                    "base_url": attempt.get("base_url", ""),
+                    "model": attempt.get("model", ""),
+                    "ok": bool(attempt.get("ok")),
+                    "elapsed_ms": attempt.get("elapsed_ms", 0),
+                    "status": attempt.get("status"),
+                    "error": redact(str(attempt.get("error", ""))),
+                }
+            )
+            continue
+        records.append(
+            {
+                "name": getattr(attempt, "name", ""),
+                "base_url": getattr(attempt, "base_url", ""),
+                "model": getattr(attempt, "model", ""),
+                "ok": bool(getattr(attempt, "ok", False)),
+                "elapsed_ms": getattr(attempt, "elapsed_ms", 0),
+                "status": getattr(attempt, "status", None),
+                "error": redact(str(getattr(attempt, "error", ""))),
+            }
+        )
+    return records
+
+
+def clear_provider_trace(vision: Any) -> None:
+    for name, value in (
+        ("last_provider_name", ""),
+        ("last_provider_base_url", ""),
+        ("last_provider_model", ""),
+        ("last_provider_attempts", []),
+    ):
+        with contextlib.suppress(Exception):
+            setattr(vision, name, value)
+
+
+def item_log_record(item: EagleItem, *, index: int, total: int) -> dict[str, Any]:
+    return {
+        "index": index,
+        "total": total,
+        "id": item.id,
+        "name": item.name,
+        "ext": item.ext,
+        "width": item.width,
+        "height": item.height,
+        "size": item.size,
+    }
+
+
 def command_tag(args: argparse.Namespace) -> int:
     validate_tag_args(args)
     taxonomy = load_taxonomy(Path(args.taxonomy))
     vision = public_attr("make_vision_client")(args)
     eagle = public_attr("EagleClient")(args.eagle_api)
+    run_log = make_tag_run_log()
+    print(f"Log: {run_log.path}")
+    print(f"Provider plan: {format_provider_plan(vision)}")
+    run_log.write(
+        "run_start",
+        command="tag",
+        mode="write" if args.write else "dry-run",
+        board_query=args.board,
+        limit=args.limit,
+        force=args.force,
+        image_edge=args.image_edge,
+        max_tags=args.max_tags,
+        retries=args.retries,
+        provider_plan=provider_plan_records(vision),
+    )
     eagle.app_info()
     board = resolve_board(args.board, eagle.boards())
     items = eagle.list_items(board.id)
@@ -1056,12 +1315,24 @@ def command_tag(args: argparse.Namespace) -> int:
     changed = 0
     failed = 0
     skipped = 0
+    run_log.write(
+        "board_loaded",
+        board={"id": board.id, "path": board.path, "name": board.name},
+        items=len(items),
+    )
 
     for index, item in enumerate(items, start=1):
         if has_moodboard_notes(item.annotation) and not args.force:
             skipped += 1
             print(f"[{index}/{len(items)}] skip\t{item.id}\t{item.name}")
+            run_log.write(
+                "item_skipped",
+                item=item_log_record(item, index=index, total=len(items)),
+                reason="already processed",
+            )
             continue
+        item_started = time.monotonic()
+        clear_provider_trace(vision)
         try:
             thumbnail = eagle.thumbnail_path(item.id)
             original = locate_original_from_thumbnail(thumbnail, item)
@@ -1078,15 +1349,40 @@ def command_tag(args: argparse.Namespace) -> int:
             annotation = notes
             changed += 1
             action = "write" if args.write else "dry-run"
+            provider = provider_summary(vision)
             print(
                 f"[{index}/{len(items)}] {action}\t{item.id}\t"
-                f"{item.name}\t{len(tags)} tags"
+                f"{item.name}\t{len(tags)} tags\t{provider}"
+            )
+            run_log.write(
+                "item_completed",
+                item=item_log_record(item, index=index, total=len(items)),
+                action=action,
+                changed=True,
+                tags=tags,
+                tag_count=len(tags),
+                provider=provider_record(vision),
+                provider_attempts=provider_attempt_records(vision),
+                elapsed_ms=elapsed_ms_since(item_started),
             )
             if args.write:
                 eagle.update_item(item.id, tags=tags, annotation=annotation)
+                run_log.write(
+                    "item_written",
+                    item=item_log_record(item, index=index, total=len(items)),
+                    tags=tags,
+                    annotation_chars=len(annotation),
+                )
         except Exception as exc:  # noqa: BLE001 - per-item isolation
             failed += 1
             print(f"[{index}/{len(items)}] failed\t{item.id}\t{redact(str(exc))}")
+            run_log.write(
+                "item_failed",
+                item=item_log_record(item, index=index, total=len(items)),
+                error=redact(str(exc)),
+                provider_attempts=provider_attempt_records(vision),
+                elapsed_ms=elapsed_ms_since(item_started),
+            )
             if args.fail_fast:
                 raise
 
@@ -1096,6 +1392,13 @@ def command_tag(args: argparse.Namespace) -> int:
     print(f"Changed: {changed}")
     print(f"Skipped: {skipped}")
     print(f"Failed: {failed}")
+    run_log.write(
+        "run_complete",
+        board={"id": board.id, "path": board.path, "name": board.name},
+        changed=changed,
+        skipped=skipped,
+        failed=failed,
+    )
     return 0 if failed == 0 else 1
 
 

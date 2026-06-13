@@ -64,6 +64,17 @@ class ProviderEndpoint:
     model: str
 
 
+@dataclass(frozen=True)
+class ProviderAttempt:
+    name: str
+    base_url: str
+    model: str
+    ok: bool
+    elapsed_ms: int
+    status: int | None = None
+    error: str = ""
+
+
 class ProviderHTTPError(CoreError):
     def __init__(self, status: int, url: str, body: str) -> None:
         self.status = status
@@ -272,6 +283,10 @@ class VisionClient:
         self.temperature = temperature
         self.top_p = top_p
         self.max_tokens = max_tokens
+        self.last_provider_name = ""
+        self.last_provider_base_url = ""
+        self.last_provider_model = ""
+        self.last_provider_attempts: list[ProviderAttempt] = []
 
     def base_urls(self) -> list[str]:
         return [
@@ -337,6 +352,10 @@ class VisionClient:
     def analyze(
         self, image: Path, taxonomy: dict[str, list[str]], retries: int, max_tags: int
     ) -> MoodtagAnalysis:
+        self.last_provider_name = ""
+        self.last_provider_base_url = ""
+        self.last_provider_model = ""
+        self.last_provider_attempts = []
         endpoints = self.endpoints()
         if not endpoints:
             raise CoreError("Missing --base-url value")
@@ -346,6 +365,7 @@ class VisionClient:
             for endpoint in endpoints:
                 if not endpoint.api_key:
                     last_error = CoreError(provider_missing_key_message(endpoint.name))
+                    self._record_attempt(endpoint, ok=False, error=last_error)
                     if (
                         endpoint.name == PRIMARY_PROVIDER_NAME
                         and self.fallback_base_url
@@ -353,6 +373,7 @@ class VisionClient:
                         continue
                     raise last_error
                 try:
+                    started = time.monotonic()
                     payload = self.build_payload(image, taxonomy, model=endpoint.model)
                     data = http_request(
                         "POST",
@@ -366,6 +387,12 @@ class VisionClient:
                     )
                 except Exception as exc:  # noqa: BLE001 - retry boundary
                     last_error = exc
+                    self._record_attempt(
+                        endpoint,
+                        ok=False,
+                        error=exc,
+                        elapsed_ms=elapsed_ms_since(started),
+                    )
                     if endpoint.name == PRIMARY_PROVIDER_NAME and is_fallback_error(
                         exc
                     ):
@@ -382,17 +409,53 @@ class VisionClient:
                         raise exc
                     continue
                 try:
-                    return parse_analysis_response(data, taxonomy, max_tags=max_tags)
+                    result = parse_analysis_response(data, taxonomy, max_tags=max_tags)
                 except CoreError as exc:
                     last_error = exc
+                    self._record_attempt(
+                        endpoint,
+                        ok=False,
+                        error=exc,
+                        elapsed_ms=elapsed_ms_since(started),
+                    )
                     response_error = True
                     break
+                self.last_provider_name = endpoint.name
+                self.last_provider_base_url = endpoint.base_url
+                self.last_provider_model = endpoint.model
+                self._record_attempt(
+                    endpoint,
+                    ok=True,
+                    elapsed_ms=elapsed_ms_since(started),
+                )
+                return result
             if response_error and attempt < retries:
                 time.sleep(1.5 * (attempt + 1))
                 continue
             if attempt < retries:
                 time.sleep(1.5 * (attempt + 1))
         raise CoreError(f"VL request failed: {redact(str(last_error))}")
+
+    def _record_attempt(
+        self,
+        endpoint: ProviderEndpoint,
+        *,
+        ok: bool,
+        elapsed_ms: int = 0,
+        error: Exception | None = None,
+    ) -> None:
+        status = error.status if isinstance(error, ProviderHTTPError) else None
+        self.last_provider_attempts.append(
+            ProviderAttempt(
+                name=endpoint.name,
+                base_url=endpoint.base_url,
+                model=endpoint.model,
+                ok=ok,
+                elapsed_ms=elapsed_ms,
+                status=status,
+                error=redact(str(error))[:500] if error else "",
+            )
+        )
 
 
 def provider_missing_key_message(name: str) -> str:
@@ -402,6 +465,10 @@ def provider_missing_key_message(name: str) -> str:
             "or configure fallback with MOODTAG_API_KEY/VL_API_KEY."
         )
     return "Missing fallback API key. Set MOODTAG_API_KEY or VL_API_KEY."
+
+
+def elapsed_ms_since(started: float) -> int:
+    return max(0, round((time.monotonic() - started) * 1000))
 
 
 def file_to_data_url(path: Path, mimetype: str) -> str:

@@ -100,6 +100,8 @@ Configuration precedence is:
 | `MOODTAG_TEMPERATURE` | `0.6` | Model temperature. |
 | `MOODTAG_TOP_P` | `0.85` | Model top-p. |
 | `MOODTAG_MAX_TOKENS` | `1028` | Max output tokens. Values below 1028 are rejected. |
+| `MOODTAG_LOG_DIR` | `~/.cache/moodtag/runs` | JSONL run log directory for `moodtag tag`. |
+| `MOODTAG_LOG_KEEP` | `50` | Number of newest `moodtag-*.jsonl` run logs to keep. |
 | `MOODTAG_NO_RESPONSE_FORMAT` | `false` | `false` sends JSON Mode. Set `true` only for providers that reject JSON Mode. |
 
 Useful single-run flags include `--eagle-api`, `--base-url`,
@@ -122,6 +124,12 @@ HTTP 429, or recognizable quota/billing throttling failures, `moodtag` falls
 back to `MOODTAG_FALLBACK_BASE_URL` with `MOODTAG_API_KEY`/`VL_API_KEY`. After a
 primary fallback-class failure, the primary provider is skipped for 1800 seconds
 using a local cache entry under the user cache directory.
+
+`moodtag tag` prints the configured provider chain at startup and appends the
+actual provider/model/host to each processed item line. It also writes a JSONL
+run log with full provider base URLs, provider attempts, item status,
+retry/fallback errors, and write status; API keys and `sk-*` secrets are
+redacted, and request image/base64 payloads are not logged.
 
 Avoid using speed-first small/flash models such as `qwen3-vl-flash` as the
 default write-path model unless a maintainer has revalidated them against real
