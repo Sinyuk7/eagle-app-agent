@@ -78,6 +78,14 @@ moodtag export-context --board 'MQBUH98ILYTQ0' --output context.md
 
 `moodtag tag --write` 会覆盖被处理图片的 Eagle `tags` 和 `annotation`，不会和原有元数据合并。
 
+`--board` 默认会递归包含所选文件夹和所有子文件夹。所有 board 命令默认最多允许 100 个去重后的图片项；超过会退出，避免误操作大目录。确认要处理大目录时显式提高门禁：
+
+```sh
+moodtag tag --board 'MQBUH98ILYTQ0' --max-board-items 500 --write
+```
+
+只处理当前文件夹、不包含子文件夹时加 `--no-recursive`。
+
 `moodtag tag` 每次都会在终端输出本次 provider plan、每张图片实际命中的 provider/model/host，并默认写入 JSONL 运行日志。日志默认位于 `~/.cache/moodtag/runs`，保留最近 50 个 `moodtag-*.jsonl` 文件。
 
 只处理一小批图片：

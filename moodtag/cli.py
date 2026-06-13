@@ -19,6 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from collections import deque
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -70,6 +71,7 @@ DEFAULT_RETRIES = 2
 DEFAULT_USER_AGENT = "moodtag/0.1"
 DEFAULT_TAXONOMY = "default"
 DEFAULT_LOG_KEEP = 50
+DEFAULT_MAX_BOARD_ITEMS = 100
 LEGACY_DEFAULT_TAXONOMY_PATHS = {"taxonomy/default.json", "./taxonomy/default.json"}
 SUPPORTED_ORIGINAL_EXTS = {
     ".jpg",
@@ -93,6 +95,19 @@ class Board:
     name: str
     path: str
     parent: str | None = None
+
+
+@dataclass(frozen=True)
+class BoardScopeFolder:
+    board: Board
+    item_count: int
+
+
+@dataclass(frozen=True)
+class BoardScope:
+    board: Board
+    folders: list[BoardScopeFolder]
+    items: list[EagleItem]
 
 
 @dataclass(frozen=True)
@@ -406,18 +421,20 @@ class EagleClient:
             pass
         boards: list[Board] = []
 
-        def visit(items: list[dict[str, Any]], prefix: str = "") -> None:
+        def visit(
+            items: list[dict[str, Any]], prefix: str = "", parent_id: str | None = None
+        ) -> None:
             for item in items:
                 folder_id = str(item.get("id", "")).strip()
                 name = str(item.get("name", "")).strip()
                 if not folder_id or not name:
                     continue
                 path = f"{prefix}/{name}" if prefix else name
-                parent = item.get("parent")
+                parent = str(item.get("parent") or parent_id or "").strip() or None
                 boards.append(Board(id=folder_id, name=name, path=path, parent=parent))
                 children = item.get("children") or []
                 if isinstance(children, list):
-                    visit(children, path)
+                    visit(children, path, folder_id)
 
         visit(folders)
         if library_name:
@@ -560,6 +577,86 @@ def dedupe_boards(boards: list[Board]) -> list[Board]:
             out.append(board)
             seen.add(board.id)
     return out
+
+
+def descendant_boards(board: Board, boards: list[Board]) -> list[Board]:
+    by_parent: dict[str, list[Board]] = {}
+    for candidate in boards:
+        if candidate.id == board.id:
+            continue
+        parent = candidate.parent
+        if not parent:
+            continue
+        by_parent.setdefault(parent, []).append(candidate)
+
+    result: list[Board] = []
+    queue = deque(by_parent.get(board.id, []))
+    seen = {board.id}
+    while queue:
+        current = queue.popleft()
+        if current.id in seen:
+            continue
+        seen.add(current.id)
+        result.append(current)
+        queue.extend(by_parent.get(current.id, []))
+    return result
+
+
+def board_scope_boards(
+    board: Board, boards: list[Board], *, recursive: bool
+) -> list[Board]:
+    if not recursive:
+        return [board]
+    return [board, *descendant_boards(board, boards)]
+
+
+def dedupe_items(items: list[EagleItem]) -> list[EagleItem]:
+    out: list[EagleItem] = []
+    seen: set[str] = set()
+    for item in items:
+        if item.id in seen:
+            continue
+        out.append(item)
+        seen.add(item.id)
+    return out
+
+
+def load_board_scope(
+    eagle: Any,
+    board_query: str,
+    *,
+    recursive: bool = True,
+    max_board_items: int = DEFAULT_MAX_BOARD_ITEMS,
+) -> BoardScope:
+    boards = eagle.boards()
+    board = resolve_board(board_query, boards)
+    scope_folders: list[BoardScopeFolder] = []
+    all_items: list[EagleItem] = []
+    for scope_board in board_scope_boards(board, boards, recursive=recursive):
+        folder_items = eagle.list_items(scope_board.id)
+        scope_folders.append(
+            BoardScopeFolder(board=scope_board, item_count=len(folder_items))
+        )
+        all_items.extend(folder_items)
+    items = dedupe_items(all_items)
+    if max_board_items >= 0 and len(items) > max_board_items:
+        raise MoodtagError(
+            f"Board scope has {len(items)} items across {len(scope_folders)} folders, "
+            f"exceeding --max-board-items {max_board_items}. "
+            "Pass a larger --max-board-items value if this is intentional."
+        )
+    return BoardScope(board=board, folders=scope_folders, items=items)
+
+
+def print_scope_summary(scope: BoardScope) -> None:
+    mode = "recursive" if len(scope.folders) > 1 else "single-folder"
+    print(f"Scope: {mode}, {len(scope.folders)} folders")
+    if len(scope.folders) > 1:
+        print("Folders:")
+        for folder in scope.folders:
+            print(
+                f"- {folder.board.path} ({folder.board.id}): {folder.item_count} items"
+            )
 
 
 def has_moodboard_notes(annotation: str) -> bool:
@@ -895,7 +992,13 @@ def make_vision_client(args: argparse.Namespace) -> VisionClient | MockVisionCli
     )
 
 
+def validate_board_scope_args(args: argparse.Namespace) -> None:
+    if args.max_board_items < -1:
+        raise MoodtagError("--max-board-items must be at least -1")
+
+
 def validate_tag_args(args: argparse.Namespace) -> None:
+    validate_board_scope_args(args)
     if args.image_edge < 256:
         raise MoodtagError("--image-edge must be at least 256")
     if args.max_tags < 1:
@@ -913,12 +1016,20 @@ def validate_tag_args(args: argparse.Namespace) -> None:
 
 
 def command_status(args: argparse.Namespace) -> int:
+    validate_board_scope_args(args)
     eagle = public_attr("EagleClient")(args.eagle_api)
     eagle.app_info()
-    board = resolve_board(args.board, eagle.boards())
-    items = eagle.list_items(board.id)
+    scope = load_board_scope(
+        eagle,
+        args.board,
+        recursive=not args.no_recursive,
+        max_board_items=args.max_board_items,
+    )
+    board = scope.board
+    items = scope.items
     processed = [item for item in items if has_moodboard_notes(item.annotation)]
     print(f"Board: {board.path} ({board.id})")
+    print_scope_summary(scope)
     print(f"Items: {len(items)}")
     print(f"Processed: {len(processed)}")
     print(f"Pending: {len(items) - len(processed)}")
@@ -1119,10 +1230,17 @@ def eagle_library_images_root(eagle: Any) -> Path | None:
 
 
 def command_export_context(args: argparse.Namespace) -> int:
+    validate_board_scope_args(args)
     eagle = public_attr("EagleClient")(args.eagle_api)
     eagle.app_info()
-    board = resolve_board(args.board, eagle.boards())
-    items = eagle.list_items(board.id)
+    scope = load_board_scope(
+        eagle,
+        args.board,
+        recursive=not args.no_recursive,
+        max_board_items=args.max_board_items,
+    )
+    board = scope.board
+    items = scope.items
     rows, _skipped_pending = context_rows(items, include_pending=args.include_pending)
     source_paths = export_source_paths(
         eagle, [item for item, _fields, _complete in rows]
@@ -1282,9 +1400,18 @@ def item_log_record(item: EagleItem, *, index: int, total: int) -> dict[str, Any
 
 def command_tag(args: argparse.Namespace) -> int:
     validate_tag_args(args)
+    eagle = public_attr("EagleClient")(args.eagle_api)
+    eagle.app_info()
+    scope = load_board_scope(
+        eagle,
+        args.board,
+        recursive=not args.no_recursive,
+        max_board_items=args.max_board_items,
+    )
+    board = scope.board
+    items = scope.items
     taxonomy = load_taxonomy(Path(args.taxonomy))
     vision = public_attr("make_vision_client")(args)
-    eagle = public_attr("EagleClient")(args.eagle_api)
     run_log = make_tag_run_log()
     print(f"Log: {run_log.path}")
     print(f"Provider plan: {format_provider_plan(vision)}")
@@ -1295,14 +1422,13 @@ def command_tag(args: argparse.Namespace) -> int:
         board_query=args.board,
         limit=args.limit,
         force=args.force,
+        recursive=not args.no_recursive,
+        max_board_items=args.max_board_items,
         image_edge=args.image_edge,
         max_tags=args.max_tags,
         retries=args.retries,
         provider_plan=provider_plan_records(vision),
     )
-    eagle.app_info()
-    board = resolve_board(args.board, eagle.boards())
-    items = eagle.list_items(board.id)
     if args.limit:
         pending: list[EagleItem] = []
         processed: list[EagleItem] = []
@@ -1318,6 +1444,15 @@ def command_tag(args: argparse.Namespace) -> int:
     run_log.write(
         "board_loaded",
         board={"id": board.id, "path": board.path, "name": board.name},
+        scope=[
+            {
+                "id": folder.board.id,
+                "path": folder.board.path,
+                "name": folder.board.name,
+                "items": folder.item_count,
+            }
+            for folder in scope.folders
+        ],
         items=len(items),
     )
 
@@ -1389,6 +1524,7 @@ def command_tag(args: argparse.Namespace) -> int:
     if not args.write:
         print("Dry run only. Re-run with --write to update Eagle.")
     print(f"Board: {board.path} ({board.id})")
+    print_scope_summary(scope)
     print(f"Changed: {changed}")
     print(f"Skipped: {skipped}")
     print(f"Failed: {failed}")
@@ -1403,10 +1539,17 @@ def command_tag(args: argparse.Namespace) -> int:
 
 
 def command_brief(args: argparse.Namespace) -> int:
+    validate_board_scope_args(args)
     eagle = public_attr("EagleClient")(args.eagle_api)
     eagle.app_info()
-    board = resolve_board(args.board, eagle.boards())
-    items = eagle.list_items(board.id)
+    scope = load_board_scope(
+        eagle,
+        args.board,
+        recursive=not args.no_recursive,
+        max_board_items=args.max_board_items,
+    )
+    board = scope.board
+    items = scope.items
     markdown = build_brief(board, items)
     if args.output:
         output = Path(args.output)
@@ -1458,10 +1601,17 @@ def escape_md(text: str) -> str:
 
 
 def command_reset(args: argparse.Namespace) -> int:
+    validate_board_scope_args(args)
     eagle = public_attr("EagleClient")(args.eagle_api)
     eagle.app_info()
-    board = resolve_board(args.board, eagle.boards())
-    items = eagle.list_items(board.id)
+    scope = load_board_scope(
+        eagle,
+        args.board,
+        recursive=not args.no_recursive,
+        max_board_items=args.max_board_items,
+    )
+    board = scope.board
+    items = scope.items
     changed = 0
     for item in items:
         if not item.annotation and not item.tags:
@@ -1473,6 +1623,7 @@ def command_reset(args: argparse.Namespace) -> int:
     if not args.write:
         print("Dry run only. Re-run with --write to clear annotations and tags.")
     print(f"Board: {board.path} ({board.id})")
+    print_scope_summary(scope)
     print(f"Reset candidates: {changed}")
     return 0
 
@@ -1532,6 +1683,22 @@ def build_parser() -> argparse.ArgumentParser:
             default=config_value(
                 user_config, "MOODTAG_EAGLE_API", "eagle_api", DEFAULT_EAGLE_API
             ),
+        )
+        p.add_argument(
+            "--max-board-items",
+            type=int,
+            default=env_int(
+                "MOODTAG_MAX_BOARD_ITEMS", DEFAULT_MAX_BOARD_ITEMS, minimum=-1
+            ),
+            help=(
+                "Abort when recursive board scope exceeds this many unique items "
+                "(default: 100; -1 disables)"
+            ),
+        )
+        p.add_argument(
+            "--no-recursive",
+            action="store_true",
+            help="Only use the selected Eagle folder, excluding child folders",
         )
 
     status = sub.add_parser("status", help="Show board tagging status")

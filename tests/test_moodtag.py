@@ -65,22 +65,27 @@ def analysis_payload(brief: str = "测试 brief"):
 
 
 class FakeEagle:
-    def __init__(self, items, thumbnail_map):
+    def __init__(self, items, thumbnail_map, *, items_by_folder=None, boards=None):
         self.items = items
+        self.items_by_folder = items_by_folder or {}
         self.thumbnail_map = thumbnail_map
+        self._boards = boards or [
+            moodtag.Board(id="B1", name="Board", path="Board"),
+            moodtag.Board(id="B2", name="Nested", path="Root/Nested"),
+        ]
         self.updated = []
 
     def app_info(self):
         return {"version": "test", "buildVersion": "test"}
 
     def boards(self):
-        return [
-            moodtag.Board(id="B1", name="Board", path="Board"),
-            moodtag.Board(id="B2", name="Nested", path="Root/Nested"),
-        ]
+        return list(self._boards)
 
     def list_items(self, folder_id):
-        assert folder_id in {"B1", "B2"}
+        valid_ids = {board.id for board in self._boards}
+        assert folder_id in valid_ids
+        if folder_id in self.items_by_folder:
+            return list(self.items_by_folder[folder_id])
         return list(self.items)
 
     def thumbnail_path(self, item_id):
@@ -675,6 +680,102 @@ class MoodtagTests(unittest.TestCase):
         self.assertEqual(completed[0]["provider"]["name"], "mock")
         self.assertEqual(completed[0]["provider_attempts"][0]["ok"], True)
         self.assertFalse(fake.updated)
+
+    def test_status_recurses_into_child_folders_by_default(self):
+        parent = moodtag.EagleItem(
+            id="PARENT",
+            name="parent",
+            ext="png",
+            tags=[],
+            folders=["B1"],
+            annotation="",
+        )
+        child = moodtag.EagleItem(
+            id="CHILD", name="child", ext="png", tags=[], folders=["B2"], annotation=""
+        )
+        duplicate = moodtag.EagleItem(
+            id="DUP",
+            name="duplicate",
+            ext="png",
+            tags=[],
+            folders=["B1"],
+            annotation="",
+        )
+        fake = FakeEagle(
+            [],
+            {},
+            boards=[
+                moodtag.Board(id="B1", name="Board", path="Board"),
+                moodtag.Board(id="B2", name="Child", path="Board/Child", parent="B1"),
+            ],
+            items_by_folder={
+                "B1": [parent, duplicate],
+                "B2": [child, duplicate],
+            },
+        )
+        buffer = io.StringIO()
+        with mock.patch.object(moodtag, "EagleClient", return_value=fake):
+            with redirect_stdout(buffer):
+                code = moodtag.main(["status", "--board", "Board"])
+        self.assertEqual(code, 0)
+        text = buffer.getvalue()
+        self.assertIn("Scope: recursive, 2 folders", text)
+        self.assertIn("- Board/Child (B2): 2 items", text)
+        self.assertIn("Items: 3", text)
+
+    def test_no_recursive_keeps_selected_folder_only(self):
+        parent = moodtag.EagleItem(
+            id="PARENT",
+            name="parent",
+            ext="png",
+            tags=[],
+            folders=["B1"],
+            annotation="",
+        )
+        child = moodtag.EagleItem(
+            id="CHILD", name="child", ext="png", tags=[], folders=["B2"], annotation=""
+        )
+        fake = FakeEagle(
+            [],
+            {},
+            boards=[
+                moodtag.Board(id="B1", name="Board", path="Board"),
+                moodtag.Board(id="B2", name="Child", path="Board/Child", parent="B1"),
+            ],
+            items_by_folder={"B1": [parent], "B2": [child]},
+        )
+        buffer = io.StringIO()
+        with mock.patch.object(moodtag, "EagleClient", return_value=fake):
+            with redirect_stdout(buffer):
+                code = moodtag.main(["status", "--board", "Board", "--no-recursive"])
+        self.assertEqual(code, 0)
+        text = buffer.getvalue()
+        self.assertIn("Scope: single-folder, 1 folders", text)
+        self.assertIn("Items: 1", text)
+        self.assertNotIn("Board/Child", text)
+
+    def test_large_recursive_board_requires_explicit_max_board_items(self):
+        items = [
+            moodtag.EagleItem(
+                id=f"I{idx}",
+                name=f"item-{idx}",
+                ext="png",
+                tags=[],
+                folders=["B1"],
+                annotation="",
+            )
+            for idx in range(101)
+        ]
+        fake = FakeEagle(items, {})
+        buffer = io.StringIO()
+        with mock.patch.object(moodtag, "EagleClient", return_value=fake):
+            with mock.patch.object(moodtag, "make_vision_client") as vision:
+                with redirect_stderr(buffer):
+                    code = moodtag.main(["tag", "--board", "Board", "--mock-vl"])
+        self.assertEqual(code, 2)
+        self.assertIn("exceeding --max-board-items 100", buffer.getvalue())
+        vision.assert_not_called()
+        self.assertEqual(fake.updated, [])
 
     def test_tag_empty_vl_result_fails_without_write(self):
         class EmptyVision:
