@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import moodtag  # noqa: E402
+from moodtag_core.prompts import resolve_profile  # noqa: E402
 
 DEFAULT_BOARD = "明日方舟 - 小红书"
 DEFAULT_FIRST_LIMIT = 5
@@ -134,6 +135,7 @@ def preflight(
     temperature: float,
     top_p: float,
     max_tokens: int,
+    profile: str,
 ) -> dict[str, Any]:
     taxonomy = moodtag.load_taxonomy(taxonomy_path)
     pending = [
@@ -157,6 +159,7 @@ def preflight(
         temperature=temperature,
         top_p=top_p,
         max_tokens=max_tokens,
+        profile=profile,
     )
     with moodtag.temporary_preview(original, image_edge=image_edge) as preview:
         result = vision.analyze(preview.path, taxonomy, retries=0, max_tags=15)
@@ -247,6 +250,7 @@ def parse_args() -> argparse.Namespace:
         "--taxonomy",
         default=os.environ.get("MOODTAG_TAXONOMY", moodtag.DEFAULT_TAXONOMY),
     )
+    parser.add_argument("--profile", default="default")
     parser.add_argument(
         "--image-edge",
         type=int,
@@ -302,6 +306,7 @@ def env_float(name: str, default: float) -> float:
 def main() -> int:
     moodtag.load_env_defaults()
     args = parse_args()
+    args.profile = resolve_profile(args.profile).id
     primary_api_key = os.environ.get("DASHSCOPE_API_KEY")
     fallback_api_key = os.environ.get("MOODTAG_API_KEY") or os.environ.get("VL_API_KEY")
     model_api_key = primary_api_key or fallback_api_key
@@ -322,6 +327,7 @@ def main() -> int:
         "fallback_base_url": args.fallback_base_url,
         "model": args.model,
         "fallback_model": args.fallback_model,
+        "profile": args.profile,
         "models": [],
         "states": {"initial": initial},
         "runs": [],
@@ -397,6 +403,7 @@ def main() -> int:
             temperature=args.temperature,
             top_p=args.top_p,
             max_tokens=args.max_tokens,
+            profile=args.profile,
         )
     except Exception as exc:  # noqa: BLE001 - report live gateway failures
         payload["failure"] = "live preflight failed"
@@ -433,6 +440,8 @@ def main() -> int:
         "tag",
         "--board",
         board.id,
+        "--profile",
+        args.profile,
         "--write",
         "--image-edge",
         str(args.image_edge),
@@ -475,6 +484,7 @@ def main() -> int:
             "base_url": args.base_url,
             "fallback_base_url": args.fallback_base_url,
             "model": model,
+            "profile": args.profile,
             "models": models,
             "preflight": preflight_result,
             "states": {

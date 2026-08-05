@@ -30,6 +30,22 @@ http://localhost:41595
 
 模型服务和 API Key 通常由维护者配置。需要本地配置时看 `CONTRIBUTING.md`。
 
+API Key 不写入 `moodtag config` 的 JSON 文件。可使用环境变量、`~/.config/moodtag/.env`，或当前目录的 `.env`：
+
+```sh
+export DASHSCOPE_API_KEY='你的 DashScope API Key'
+# 或使用默认 fallback relay：
+export MOODTAG_API_KEY='你的 n1n API Key'
+
+moodtag config show
+```
+
+将 `MOODTAG_BASE_URL=https://api.n1n.ai/v1` 时，`MOODTAG_API_KEY`（或 `VL_API_KEY`）会作为 primary Key；同一 URL、model、Key 的 fallback 会自动去重。
+
+`config show` 会显示 `primary_api_key: set/unset` 和
+`fallback_api_key: set/unset`。首次运行时会生成带完整字段的
+`~/.config/moodtag/config.json` 模板；其中只包含 URL、model、Eagle API 等非敏感配置。
+
 ## 2. 找到 Eagle 文件夹 ID
 
 在 Eagle App 左侧文件夹上右键，选择复制链接，会得到类似：
@@ -119,6 +135,8 @@ moodtag tag --board 'MQBUH98ILYTQ0' --max-board-items 500 --write
 只处理当前文件夹、不包含子文件夹时加 `--no-recursive`。
 
 `moodtag tag` 每次都会在终端输出本次 provider plan、每张图片实际命中的 provider/model/host，并默认写入 JSONL 运行日志。日志默认位于 `~/.cache/moodtag/runs`，保留最近 50 个 `moodtag-*.jsonl` 文件。
+
+开始并发前，`moodtag` 会先串行验证一张可处理图片。若 provider 返回 `401` 或 `403`，会立即停止本次运行，不会继续对后续图片发送请求；按提示更新对应的 `DASHSCOPE_API_KEY`、`MOODTAG_API_KEY` 或 `VL_API_KEY` 后再重试。视频等非图片素材会显示为 `skip`，不会记为失败。
 
 默认发送给模型的预览图长边是 `768px`。需要更高细节时可以传 `--image-edge 1024`。
 

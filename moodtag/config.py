@@ -32,6 +32,8 @@ def load_user_config(path: Path | None = None) -> dict[str, str]:
         return {}
     except OSError as exc:
         raise ConfigError(f"Cannot read config file {path}: {exc}") from exc
+    if not raw.strip():
+        return {}
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -52,7 +54,8 @@ def load_user_config(path: Path | None = None) -> dict[str, str]:
 def save_user_config(config: dict[str, str], path: Path | None = None) -> Path:
     path = path or config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    clean = {key: str(config[key]).strip() for key in CONFIG_KEYS if config.get(key)}
+    # Keep config file self-documenting: every non-secret key exists, even unset.
+    clean = {key: str(config.get(key, "") or "").strip() for key in CONFIG_KEYS}
     path.write_text(
         json.dumps(clean, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

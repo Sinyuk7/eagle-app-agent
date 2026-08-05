@@ -50,18 +50,23 @@ from moodtag_core.contract import (
     CoreError,
     MoodtagAnalysis,
 )
+from moodtag_core.prompts import resolve_profile
 from moodtag_core.provider import (
-    VisionClient as CoreVisionClient,
+    ProviderAuthenticationError,
+    elapsed_ms_since,
+    is_n1n_base_url,
 )
 from moodtag_core.provider import (
-    elapsed_ms_since,
+    VisionClient as CoreVisionClient,
 )
 from moodtag_core.response import normalize_analysis_json, parse_analysis_response
 
 from .config import (
     ConfigError,
+    config_path,
     load_user_config,
     public_config_view,
+    save_user_config,
     update_user_config,
 )
 
@@ -270,6 +275,9 @@ def models_url(base_url: str) -> str:
 
 
 def load_env_defaults() -> None:
+    user_env = config_path().with_name(".env")
+    if user_env != Path.cwd() / ".env":
+        load_env_file(user_env)
     load_env_file(Path.cwd() / ".env")
 
 
@@ -281,6 +289,7 @@ def load_env_file(path: Path) -> None:
     except OSError as exc:
         raise MoodtagError(f"Cannot read env file {path}: {exc}") from exc
 
+    inherited_keys = set(os.environ)
     for line_number, raw_line in enumerate(lines, start=1):
         line = raw_line.strip()
         if not line or line.startswith("#"):
@@ -291,7 +300,7 @@ def load_env_file(path: Path) -> None:
         key = key.strip()
         if not separator or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
             raise MoodtagError(f"Invalid env line in {path}:{line_number}")
-        if key in os.environ:
+        if key in inherited_keys:
             continue
         os.environ[key] = parse_env_value(raw_value)
 
@@ -742,6 +751,13 @@ def locate_original_from_thumbnail(thumbnail: Path, item: EagleItem) -> Path:
     return locate_original_in_info_dir(thumbnail.parent, item)
 
 
+def unsupported_media_reason(item: EagleItem) -> str | None:
+    extension = item.ext.strip().lower().lstrip(".")
+    if f".{extension}" in SUPPORTED_ORIGINAL_EXTS:
+        return None
+    return f"unsupported media type: {extension or 'unknown'}"
+
+
 def locate_original_in_info_dir(info_dir: Path, item: EagleItem) -> Path:
     if not info_dir.exists() or not info_dir.is_dir():
         raise MoodtagError(f"Item directory not found for {item.id}: {info_dir}")
@@ -867,8 +883,9 @@ class VisionClient(CoreVisionClient):
 
 
 class MockVisionClient:
-    def __init__(self, model: str = "mock-vision") -> None:
+    def __init__(self, model: str = "mock-vision", profile: str = "default") -> None:
         self.model = model
+        self.profile = resolve_profile(profile).id
         self.last_provider_name = "mock"
         self.last_provider_base_url = "mock://local"
         self.last_provider_model = model
@@ -919,10 +936,10 @@ def file_to_data_url(path: Path, mimetype: str) -> str:
     return f"data:{mimetype};base64,{encoded}"
 
 
-def build_prompt(taxonomy: dict[str, list[str]]) -> str:
+def build_prompt(taxonomy: dict[str, list[str]], profile: str = "default") -> str:
     from moodtag_core.prompts import render_user_prompt
 
-    return render_user_prompt(taxonomy)
+    return render_user_prompt(taxonomy, profile=profile)
 
 
 def extract_chat_content_json(data: Any) -> dict[str, Any]:
@@ -986,12 +1003,17 @@ def build_notes_block(result: MoodtagAnalysis) -> str:
 
 def make_vision_client(args: argparse.Namespace) -> VisionClient | MockVisionClient:
     if getattr(args, "mock_vl", False):
-        return MockVisionClient(args.model or "mock-vision")
+        return MockVisionClient(args.model or "mock-vision", profile=args.profile)
     model = args.model or os.environ.get("MOODTAG_MODEL", "") or DEFAULT_MODEL
     if not model:
         raise MoodtagError("Missing model. Pass --model or set MOODTAG_MODEL.")
-    api_key = os.environ.get("DASHSCOPE_API_KEY")
-    fallback_api_key = os.environ.get("MOODTAG_API_KEY") or os.environ.get("VL_API_KEY")
+    api_key = provider_api_key_for_base_url(args.base_url)
+    fallback_api_key = provider_api_key_for_base_url(args.fallback_base_url)
+    if not api_key and not fallback_api_key:
+        raise MoodtagError(
+            "No vision API key configured. Set MOODTAG_API_KEY for n1n, "
+            "or DASHSCOPE_API_KEY for DashScope."
+        )
     return VisionClient(
         base_url=args.base_url,
         fallback_base_url=args.fallback_base_url,
@@ -1003,7 +1025,14 @@ def make_vision_client(args: argparse.Namespace) -> VisionClient | MockVisionCli
         temperature=args.temperature,
         top_p=args.top_p,
         max_tokens=args.max_tokens,
+        profile=args.profile,
     )
+
+
+def provider_api_key_for_base_url(base_url: str) -> str | None:
+    if is_n1n_base_url(base_url):
+        return os.environ.get("MOODTAG_API_KEY") or os.environ.get("VL_API_KEY")
+    return os.environ.get("DASHSCOPE_API_KEY")
 
 
 def validate_board_scope_args(args: argparse.Namespace) -> None:
@@ -1013,6 +1042,10 @@ def validate_board_scope_args(args: argparse.Namespace) -> None:
 
 def validate_tag_args(args: argparse.Namespace) -> None:
     validate_board_scope_args(args)
+    try:
+        args.profile = resolve_profile(args.profile).id
+    except CoreError as exc:
+        raise MoodtagError(str(exc)) from exc
     if args.image_edge < 256:
         raise MoodtagError("--image-edge must be at least 256")
     if args.concurrency < 1:
@@ -1536,6 +1569,7 @@ def item_log_record(item: EagleItem, *, index: int, total: int) -> dict[str, Any
 
 def command_tag(args: argparse.Namespace) -> int:
     validate_tag_args(args)
+    vision = public_attr("make_vision_client")(args)
     eagle = public_attr("EagleClient")(args.eagle_api)
     eagle.app_info()
     scope = load_board_scope(
@@ -1547,13 +1581,13 @@ def command_tag(args: argparse.Namespace) -> int:
     board = scope.board
     items = scope.items
     taxonomy = load_taxonomy(Path(args.taxonomy))
-    vision = public_attr("make_vision_client")(args)
     run_log = make_tag_run_log()
     print(f"Log: {run_log.path}")
     print(f"Provider plan: {format_provider_plan(vision)}")
     run_log.write(
         "run_start",
         command="tag",
+        profile=args.profile,
         mode="write" if args.write else "dry-run",
         board_query=args.board,
         limit=args.limit,
@@ -1608,7 +1642,9 @@ def command_tag(args: argparse.Namespace) -> int:
                 provider_attempts=result.provider_attempts,
                 elapsed_ms=result.elapsed_ms,
             )
-            if args.fail_fast:
+            if args.fail_fast and not isinstance(
+                result.error, ProviderAuthenticationError
+            ):
                 raise result.error
             return 0, 1
 
@@ -1661,16 +1697,78 @@ def command_tag(args: argparse.Namespace) -> int:
         return 1, 0
 
     work_items: list[tuple[int, EagleItem]] = []
-    skipped_indexes: set[int] = set()
+    skipped_reasons: dict[int, str] = {}
     for index, item in enumerate(items, start=1):
         if has_moodboard_notes(item.annotation) and not args.force:
-            skipped += 1
-            skipped_indexes.add(index)
+            skipped_reasons[index] = "already processed"
+        elif reason := unsupported_media_reason(item):
+            skipped_reasons[index] = reason
         else:
             work_items.append((index, item))
 
+    probe_result: TagItemResult | None = None
+    if work_items:
+        probe_index, probe_item = work_items[0]
+        probe_result = analyze_tag_item(
+            index=probe_index,
+            item=probe_item,
+            eagle=eagle,
+            vision=vision,
+            taxonomy=taxonomy,
+            image_edge=args.image_edge,
+            retries=args.retries,
+            max_tags=args.max_tags,
+        )
+
+    def emit_skip(index: int, item: EagleItem, reason: str) -> None:
+        nonlocal skipped
+        skipped += 1
+        print(f"[{index}/{total}] skip\t{item.id}\t{item.name}\t{reason}")
+        run_log.write(
+            "item_skipped",
+            item=item_log_record(item, index=index, total=total),
+            reason=reason,
+        )
+
+    def finish_run(*, aborted: bool = False) -> int:
+        if not args.write:
+            print("Dry run only. Re-run with --write to update Eagle.")
+        print(f"Board: {board.path} ({board.id})")
+        print_scope_summary(scope)
+        print(f"Changed: {changed}")
+        print(f"Skipped: {skipped}")
+        print(f"Failed: {failed}")
+        run_log.write(
+            "run_complete",
+            board={"id": board.id, "path": board.path, "name": board.name},
+            changed=changed,
+            skipped=skipped,
+            failed=failed,
+            aborted=aborted,
+        )
+        return 0 if failed == 0 else 1
+
+    if probe_result is not None and isinstance(
+        probe_result.error, ProviderAuthenticationError
+    ):
+        for index, item in enumerate(items, start=1):
+            if reason := skipped_reasons.get(index):
+                emit_skip(index, item, reason)
+                continue
+            if index == probe_result.index:
+                result_changed, result_failed = handle_result(probe_result)
+                changed += result_changed
+                failed += result_failed
+                run_log.write(
+                    "run_aborted",
+                    reason=redact(str(probe_result.error)),
+                    provider_attempts=probe_result.provider_attempts,
+                )
+                return finish_run(aborted=True)
+
+    remaining_work_items = work_items[1:] if probe_result is not None else []
     results = run_tag_analysis(
-        work_items=work_items,
+        work_items=remaining_work_items,
         eagle=eagle,
         vision=vision,
         vision_factory=(
@@ -1686,33 +1784,26 @@ def command_tag(args: argparse.Namespace) -> int:
     )
     result_iter = iter(results)
     for index, item in enumerate(items, start=1):
-        if index in skipped_indexes:
-            print(f"[{index}/{total}] skip\t{item.id}\t{item.name}")
-            run_log.write(
-                "item_skipped",
-                item=item_log_record(item, index=index, total=total),
-                reason="already processed",
-            )
+        if reason := skipped_reasons.get(index):
+            emit_skip(index, item, reason)
             continue
-        result_changed, result_failed = handle_result(next(result_iter))
+        result = (
+            probe_result
+            if probe_result is not None and index == probe_result.index
+            else next(result_iter)
+        )
+        result_changed, result_failed = handle_result(result)
         changed += result_changed
         failed += result_failed
+        if isinstance(result.error, ProviderAuthenticationError):
+            run_log.write(
+                "run_aborted",
+                reason=redact(str(result.error)),
+                provider_attempts=result.provider_attempts,
+            )
+            return finish_run(aborted=True)
 
-    if not args.write:
-        print("Dry run only. Re-run with --write to update Eagle.")
-    print(f"Board: {board.path} ({board.id})")
-    print_scope_summary(scope)
-    print(f"Changed: {changed}")
-    print(f"Skipped: {skipped}")
-    print(f"Failed: {failed}")
-    run_log.write(
-        "run_complete",
-        board={"id": board.id, "path": board.path, "name": board.name},
-        changed=changed,
-        skipped=skipped,
-        failed=failed,
-    )
-    return 0 if failed == 0 else 1
+    return finish_run()
 
 
 def command_brief(args: argparse.Namespace) -> int:
@@ -1822,11 +1913,22 @@ def command_config_set(args: argparse.Namespace) -> int:
 
 
 def command_config_show(args: argparse.Namespace) -> int:
+    config_file = config_path()
+    if not config_file.exists() or config_file.stat().st_size == 0:
+        save_user_config({}, config_file)
     config = load_user_config()
-    primary_api_key_set = bool(os.environ.get("DASHSCOPE_API_KEY"))
-    fallback_api_key_set = bool(
-        os.environ.get("MOODTAG_API_KEY") or os.environ.get("VL_API_KEY")
+    save_user_config(config, config_file)
+    primary_base_url = config_value(
+        config, "MOODTAG_BASE_URL", "base_url", DEFAULT_BASE_URL
     )
+    fallback_base_url = config_value(
+        config,
+        "MOODTAG_FALLBACK_BASE_URL",
+        "fallback_base_url",
+        DEFAULT_FALLBACK_BASE_URL,
+    )
+    primary_api_key_set = bool(provider_api_key_for_base_url(primary_base_url))
+    fallback_api_key_set = bool(provider_api_key_for_base_url(fallback_base_url))
     view = public_config_view(
         config,
         api_key_set=primary_api_key_set or fallback_api_key_set,
@@ -1887,6 +1989,11 @@ def build_parser() -> argparse.ArgumentParser:
     common(tag)
     tag.add_argument("--write", action="store_true", help="Actually update Eagle")
     tag.add_argument("--force", action="store_true", help="Reprocess existing notes")
+    tag.add_argument(
+        "--profile",
+        default="default",
+        help="Prompt profile to use (default: default)",
+    )
     tag.add_argument("--mock-vl", action="store_true", help="Use deterministic mock VL")
     tag.add_argument(
         "--base-url",

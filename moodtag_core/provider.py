@@ -22,7 +22,7 @@ from .contract import (
     CoreError,
     MoodtagAnalysis,
 )
-from .prompts import read_system_prompt, render_user_prompt
+from .prompts import read_system_prompt, render_user_prompt, resolve_profile
 from .response import parse_analysis_response
 
 DEFAULT_USER_AGENT = "moodtag/0.1"
@@ -85,6 +85,20 @@ class ProviderHTTPError(CoreError):
         super().__init__(f"HTTP {status} from {url}: {redact(detail)}")
 
 
+class ProviderAuthenticationError(ProviderHTTPError):
+    """An API key was accepted as configured but rejected by a provider."""
+
+    def __init__(self, endpoint: ProviderEndpoint, error: ProviderHTTPError) -> None:
+        super().__init__(error.status, error.url, error.body)
+        self.endpoint = endpoint
+        host = urllib.parse.urlsplit(endpoint.base_url).netloc or endpoint.base_url
+        key_name = api_key_environment_for_base_url(endpoint.base_url)
+        self.args = (
+            f"Provider authentication failed: {endpoint.name} ({host}) rejected "
+            f"{key_name} (HTTP {error.status}). Stopping run.",
+        )
+
+
 class ProviderNetworkError(CoreError):
     def __init__(self, url: str, reason: Any) -> None:
         self.url = url
@@ -107,6 +121,17 @@ def parse_provider_error(body: str) -> tuple[str, str]:
     code = data.get("code") or data.get("Code") or ""
     message = data.get("message") or data.get("Message") or data.get("error") or ""
     return str(code), str(message)
+
+
+def is_n1n_base_url(base_url: str) -> bool:
+    hostname = urllib.parse.urlsplit(base_url).hostname or ""
+    return hostname.lower() == "api.n1n.ai"
+
+
+def api_key_environment_for_base_url(base_url: str) -> str:
+    if is_n1n_base_url(base_url):
+        return "MOODTAG_API_KEY or VL_API_KEY"
+    return "DASHSCOPE_API_KEY"
 
 
 def provider_cache_path() -> Path:
@@ -145,10 +170,16 @@ def save_provider_state(state: dict[str, Any], path: Path | None = None) -> None
         return
 
 
-def provider_in_cooldown(name: str, now: float | None = None) -> bool:
+def provider_in_cooldown(
+    name: str, now: float | None = None, *, base_url: str = ""
+) -> bool:
     now = time.time() if now is None else now
     entry = load_provider_state().get(name)
     if not isinstance(entry, dict):
+        return False
+    recorded_base_url = str(entry.get("base_url", "")).strip().rstrip("/")
+    requested_base_url = base_url.strip().rstrip("/")
+    if requested_base_url and recorded_base_url != requested_base_url:
         return False
     try:
         disabled_until = float(entry.get("disabled_until", 0))
@@ -163,6 +194,7 @@ def record_provider_cooldown(
     *,
     cooldown_seconds: int = DEFAULT_PROVIDER_COOLDOWN_SECONDS,
     now: float | None = None,
+    base_url: str = "",
 ) -> None:
     if cooldown_seconds <= 0:
         return
@@ -171,6 +203,7 @@ def record_provider_cooldown(
     state[name] = {
         "disabled_until": now + cooldown_seconds,
         "reason": redact(str(error))[:500],
+        "base_url": base_url.strip().rstrip("/"),
     }
     save_provider_state(state)
 
@@ -269,6 +302,7 @@ class VisionClient:
         temperature: float = DEFAULT_TEMPERATURE,
         top_p: float = DEFAULT_TOP_P,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        profile: str = "default",
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.fallback_base_url = fallback_base_url.rstrip("/")
@@ -283,6 +317,7 @@ class VisionClient:
         self.temperature = temperature
         self.top_p = top_p
         self.max_tokens = max_tokens
+        self.profile = resolve_profile(profile).id
         self.last_provider_name = ""
         self.last_provider_base_url = ""
         self.last_provider_model = ""
@@ -310,7 +345,7 @@ class VisionClient:
             if not url or key in seen:
                 continue
             if include_cooldown and name == PRIMARY_PROVIDER_NAME:
-                if provider_in_cooldown(PRIMARY_PROVIDER_NAME):
+                if provider_in_cooldown(PRIMARY_PROVIDER_NAME, base_url=url):
                     continue
             endpoints.append(
                 ProviderEndpoint(
@@ -332,7 +367,10 @@ class VisionClient:
             "top_p": self.top_p,
             "max_tokens": self.max_tokens,
             "messages": [
-                {"role": "system", "content": read_system_prompt()},
+                {
+                    "role": "system",
+                    "content": read_system_prompt(profile=self.profile),
+                },
                 {
                     "role": "user",
                     "content": [
@@ -340,7 +378,10 @@ class VisionClient:
                             "type": "image_url",
                             "image_url": {"url": file_to_data_url(image, "image/jpeg")},
                         },
-                        {"type": "text", "text": render_user_prompt(taxonomy)},
+                        {
+                            "type": "text",
+                            "text": render_user_prompt(taxonomy, profile=self.profile),
+                        },
                     ],
                 },
             ],
@@ -393,6 +434,8 @@ class VisionClient:
                         error=exc,
                         elapsed_ms=elapsed_ms_since(started),
                     )
+                    if isinstance(exc, ProviderHTTPError) and exc.status in {401, 403}:
+                        raise ProviderAuthenticationError(endpoint, exc) from exc
                     if endpoint.name == PRIMARY_PROVIDER_NAME and is_fallback_error(
                         exc
                     ):
@@ -401,6 +444,7 @@ class VisionClient:
                                 PRIMARY_PROVIDER_NAME,
                                 exc,
                                 cooldown_seconds=self.cooldown_seconds,
+                                base_url=endpoint.base_url,
                             )
                             continue
                     if isinstance(exc, ProviderHTTPError) and not is_fallback_error(

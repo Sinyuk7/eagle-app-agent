@@ -1,0 +1,37 @@
+Analyze this commercial editorial portrait image and output ONLY valid JSON using this exact template and key order:
+
+{{json_template}}
+
+Field definitions:
+- brief: One concise Chinese sentence. Directly state subject, pose/state, and scene or key props. Visible facts only. No intro phrases, no abstract evaluation.
+- elements: Array of 5-10 visible, relatively static, searchable Chinese noun phrases. Prioritize garments, brand evidence, product categories, logo/wordmark, main colors, and key accessories. Keep materials, layering, and secondary accessories only when obvious and useful. Do NOT include action/state, camera/framing, composition, lighting, mood, style labels, brand guesses, or use-intent words.
+- use: One short Chinese sentence naming reference value. Write like a work note, not an explanation. Do not use phrases like "此图可作为" or "主要用于"; go straight to the reference dimension.
+- key: Chinese natural language describing the commercial visual hook. Start with visible evidence first: brand/logo/wordmark/product identifier if present; otherwise write "无品牌证据". Brand evidence must come from pixels only; never infer from campaign title, publication name, board name, metadata, or style. Then give the shortest useful judgment about styling, campaign direction, or color system. Use a direct noun-led style. Limit to 1-2 clauses. No generic praise, no "图中可见", no "展示了", no "形成", no "营造", no "呈现", no guessing.
+- camera: Chinese-first short phrase with key professional terms in English only as local modifiers. Only shot size, angle, framing, subject placement, negative space, perspective, and scale. Prefer fragments over full sentences. No camera setup, no narrative, no full English sentence.
+- light_color: Chinese-first short phrase with key professional terms in English only as local modifiers. Describe dominant, supporting, and accent colors plus where they appear. Mention wardrobe, accessory, and environment color relations. Prefer fragments over full sentences. No grading-only description, no full English sentence.
+- tags: Array of exact tags selected only from the allowed taxonomy.
+- use_intents: Array of exact internal use intent ids selected only from the left side of the allowed use intents list.
+
+Language rules:
+- Field names stay English through the JSON keys.
+- Natural-language field values should be Chinese-first. Keep English only for established professional visual terms when they make the description more precise, and never as a full standalone clause.
+- Do not infer brand names from fashion style, campaign title, or magazine context. If no readable logo/wordmark/product mark is visible, do not name a brand.
+- Prefer direct observation language. Avoid filler such as "图中可见", "此图可作为", "展示了", "营造出", "极具", "通过", "结合", "强调" unless truly necessary.
+- Do not include tags, suggested tags, or use intent ids in brief/elements/use/key/camera/light_color.
+- Do not invent tags.
+- If a tag is uncertain, omit it.
+- Do not output pipeline tag names inside use_intents. For example, output "pose_reference", not "pose ref"; output "aigc_prompt_reference", not "prompt ref".
+- Do not repeat any tag or use_intent.
+
+Allowed taxonomy:
+{{taxonomy}}
+
+Allowed use intents:
+{{use_intents}}
+
+Output rules:
+- Output MUST be raw JSON only.
+- Do NOT wrap in markdown or code blocks.
+- Response must start with { and end with }.
+- No text before or after JSON.
+- Close every array and close the final JSON object.
