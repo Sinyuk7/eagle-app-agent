@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 import moodtag
+from moodtag.config import CONFIG_KEYS, load_user_config, save_user_config
 from moodtag_core.annotation import build_annotation_block
 from moodtag_core.contract import (
     DEFAULT_BASE_URL,
@@ -24,9 +25,19 @@ from moodtag_core.contract import (
     DEFAULT_NO_RESPONSE_FORMAT,
     DEFAULT_TEMPERATURE,
     DEFAULT_TOP_P,
+    CoreError,
 )
-from moodtag_core.prompts import read_system_prompt, render_user_prompt
-from moodtag_core.provider import ProviderHTTPError
+from moodtag_core.prompts import (
+    available_profiles,
+    read_system_prompt,
+    render_user_prompt,
+    resolve_profile,
+)
+from moodtag_core.provider import (
+    ProviderAuthenticationError,
+    ProviderEndpoint,
+    ProviderHTTPError,
+)
 from moodtag_core.response import normalize_analysis_json
 from moodtag_core.taxonomy import render_taxonomy_for_prompt
 from scripts import export_moodboard_context
@@ -294,6 +305,41 @@ class MoodtagTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("--concurrency", stderr.getvalue())
 
+    def test_unknown_profile_short_circuits_before_eagle(self):
+        stderr = io.StringIO()
+        with mock.patch.object(
+            moodtag, "EagleClient", side_effect=AssertionError("should not touch Eagle")
+        ):
+            with redirect_stderr(stderr), redirect_stdout(io.StringIO()):
+                code = moodtag.main(
+                    ["tag", "--board", "Board", "--mock-vl", "--profile", "unknown"]
+                )
+        self.assertEqual(code, 2)
+        self.assertIn("Unknown prompt profile: unknown", stderr.getvalue())
+
+    def test_missing_api_keys_fails_before_eagle_or_image_processing(self):
+        stderr = io.StringIO()
+        with mock.patch.dict(
+            os.environ,
+            {
+                "DASHSCOPE_API_KEY": "",
+                "MOODTAG_API_KEY": "",
+                "VL_API_KEY": "",
+            },
+            clear=False,
+        ):
+            with mock.patch.object(
+                moodtag,
+                "EagleClient",
+                side_effect=AssertionError("should not touch Eagle"),
+            ):
+                with redirect_stderr(stderr), redirect_stdout(io.StringIO()):
+                    code = moodtag.main(["tag", "--board", "Board"])
+        self.assertEqual(code, 2)
+        self.assertIn("No vision API key configured.", stderr.getvalue())
+        self.assertIn("MOODTAG_API_KEY", stderr.getvalue())
+        self.assertIn("DASHSCOPE_API_KEY", stderr.getvalue())
+
     def test_validate_vl_result_rejects_empty_result(self):
         with self.assertRaisesRegex(moodtag.MoodtagError, "brief"):
             moodtag.normalize_vl_result(analysis_payload(brief=""))
@@ -332,6 +378,33 @@ class MoodtagTests(unittest.TestCase):
                 self.assertEqual(
                     os.environ["MOODTAG_BASE_URL"], "https://example.test/v1"
                 )
+
+    def test_load_env_file_uses_last_value_from_one_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+            env_file.write_text(
+                "MOODTAG_API_KEY=old-key\nMOODTAG_API_KEY=new-key\n",
+                encoding="utf-8",
+            )
+            with mock.patch.dict(os.environ, {}, clear=True):
+                moodtag.load_env_file(env_file)
+                self.assertEqual(os.environ["MOODTAG_API_KEY"], "new-key")
+
+    def test_load_env_defaults_reads_user_config_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "moodtag" / "config.json"
+            user_env = config_path.with_name(".env")
+            user_env.parent.mkdir(parents=True)
+            user_env.write_text("MOODTAG_API_KEY=user-key\n", encoding="utf-8")
+            with mock.patch.dict(
+                os.environ,
+                {"MOODTAG_CONFIG": str(config_path)},
+                clear=True,
+            ):
+                with chdir(root):
+                    moodtag.load_env_defaults()
+                self.assertEqual(os.environ["MOODTAG_API_KEY"], "user-key")
 
     def test_parser_uses_environment_defaults(self):
         env = {
@@ -421,6 +494,79 @@ class MoodtagTests(unittest.TestCase):
                     self.assertNotIn("sk-testSecret", buffer.getvalue())
                     self.assertNotIn("sk-testFallback", buffer.getvalue())
 
+    def test_config_show_creates_template_when_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
+            with mock.patch.dict(
+                os.environ, {"MOODTAG_CONFIG": str(config_path)}, clear=False
+            ):
+                with redirect_stdout(io.StringIO()):
+                    code = moodtag.main(["config", "show"])
+            self.assertEqual(code, 0)
+            saved = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                saved,
+                {
+                    "base_url": "",
+                    "eagle_api": "",
+                    "fallback_base_url": "",
+                    "fallback_model": "",
+                    "model": "",
+                },
+            )
+
+    def test_config_show_repairs_empty_template_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
+            config_path.touch()
+            with mock.patch.dict(
+                os.environ, {"MOODTAG_CONFIG": str(config_path)}, clear=False
+            ):
+                with redirect_stdout(io.StringIO()):
+                    code = moodtag.main(["config", "show"])
+            self.assertEqual(code, 0)
+            self.assertEqual(
+                set(json.loads(config_path.read_text(encoding="utf-8"))),
+                {
+                    "base_url",
+                    "fallback_base_url",
+                    "model",
+                    "fallback_model",
+                    "eagle_api",
+                },
+            )
+
+    def test_save_user_config_writes_empty_template_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "nested" / "config.json"
+            save_user_config({}, config_path)
+
+            saved = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved, {key: "" for key in CONFIG_KEYS})
+            self.assertEqual(load_user_config(config_path), {})
+
+    def test_save_user_config_preserves_existing_values_and_fills_missing_keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "base_url": " https://configured.example/v1 ",
+                        "model": " configured-model ",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            save_user_config(load_user_config(config_path), config_path)
+
+            saved = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["base_url"], "https://configured.example/v1")
+            self.assertEqual(saved["model"], "configured-model")
+            self.assertEqual(saved["fallback_base_url"], "")
+            self.assertEqual(saved["fallback_model"], "")
+            self.assertEqual(saved["eagle_api"], "")
+
     def test_environment_overrides_user_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "config.json"
@@ -459,7 +605,10 @@ class MoodtagTests(unittest.TestCase):
         self.assertIn("medium", taxonomy)
 
     def test_parser_defaults_match_reference_provider_contract(self):
-        with mock.patch.dict(os.environ, {}, clear=True):
+        isolated_config = Path(self._log_tmp.name) / "config.json"
+        with mock.patch.dict(
+            os.environ, {"MOODTAG_CONFIG": str(isolated_config)}, clear=True
+        ):
             parser = moodtag.build_parser()
             args = parser.parse_args(["tag", "--board", "Board"])
         self.assertEqual(args.base_url, DEFAULT_BASE_URL)
@@ -488,6 +637,7 @@ class MoodtagTests(unittest.TestCase):
         env = {
             "DASHSCOPE_API_KEY": "sk-testPrimarySecretForMakeClient123456",
             "MOODTAG_API_KEY": "sk-testFallbackSecretForMakeClient123456",
+            "MOODTAG_CONFIG": str(Path(self._log_tmp.name) / "config.json"),
         }
         with mock.patch.dict(os.environ, env, clear=True):
             parser = moodtag.build_parser()
@@ -496,6 +646,33 @@ class MoodtagTests(unittest.TestCase):
         self.assertEqual(client.api_key, "sk-testPrimarySecretForMakeClient123456")
         self.assertEqual(
             client.fallback_api_key, "sk-testFallbackSecretForMakeClient123456"
+        )
+
+    def test_make_vision_client_uses_n1n_key_as_primary_for_n1n_base_url(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MOODTAG_API_KEY": "sk-testN1nPrimaryKey123456",
+                "MOODTAG_CONFIG": str(Path(self._log_tmp.name) / "config.json"),
+            },
+            clear=True,
+        ):
+            parser = moodtag.build_parser()
+            args = parser.parse_args(
+                [
+                    "tag",
+                    "--board",
+                    "Board",
+                    "--base-url",
+                    "https://api.n1n.ai/v1",
+                ]
+            )
+            client = moodtag.make_vision_client(args)
+
+        self.assertEqual(client.api_key, "sk-testN1nPrimaryKey123456")
+        self.assertEqual(client.fallback_api_key, "sk-testN1nPrimaryKey123456")
+        self.assertEqual(
+            [endpoint.name for endpoint in client.endpoints()], ["primary"]
         )
         self.assertEqual(client.model, DEFAULT_MODEL)
         self.assertEqual(client.fallback_model, DEFAULT_FALLBACK_MODEL)
@@ -558,6 +735,35 @@ class MoodtagTests(unittest.TestCase):
         self.assertIn("medium: photo | concept art", user_prompt)
         self.assertIn("lighting_reference -> lighting ref", user_prompt)
         self.assertNotIn('{\n  "medium"', user_prompt)
+
+    def test_prompt_profiles_keep_default_stable_and_render_editorial(self):
+        taxonomy = {"medium": ["photo"], "lighting": ["rim light"]}
+
+        self.assertEqual(available_profiles(), ("default", "editorial"))
+        self.assertEqual(resolve_profile("DEFAULT").id, "default")
+        self.assertEqual(read_system_prompt(), read_system_prompt(profile="default"))
+        self.assertEqual(
+            render_user_prompt(taxonomy),
+            render_user_prompt(taxonomy, profile="default"),
+        )
+
+        editorial_system = read_system_prompt(profile="editorial")
+        editorial_user = render_user_prompt(taxonomy, profile="editorial")
+        self.assertIn("commercial editorial portrait", editorial_system)
+        self.assertIn("brand evidence", editorial_user)
+        self.assertIn("One concise Chinese sentence", editorial_user)
+        self.assertIn("Write like a work note", editorial_user)
+        self.assertIn('no "图中可见"', editorial_user)
+        self.assertIn("Chinese-first", editorial_user)
+        self.assertIn("Do not infer brand names", editorial_user)
+        self.assertIn("main colors", editorial_user)
+        self.assertIn("medium: photo", editorial_user)
+        self.assertIn("lighting: rim light", editorial_user)
+        self.assertIn("Avoid filler such as", editorial_user)
+
+    def test_prompt_profile_rejects_unknown_profile(self):
+        with self.assertRaisesRegex(CoreError, "Unknown prompt profile: unknown"):
+            read_system_prompt(profile="unknown")
 
     def test_taxonomy_renderer_is_compact_line_format(self):
         rendered = render_taxonomy_for_prompt(
@@ -717,6 +923,7 @@ class MoodtagTests(unittest.TestCase):
             if line.strip()
         ]
         self.assertEqual(records[0]["event"], "run_start")
+        self.assertEqual(records[0]["profile"], "default")
         completed = [
             record for record in records if record["event"] == "item_completed"
         ]
@@ -818,7 +1025,7 @@ class MoodtagTests(unittest.TestCase):
                     code = moodtag.main(["tag", "--board", "Board", "--mock-vl"])
         self.assertEqual(code, 2)
         self.assertIn("exceeding --max-board-items 100", buffer.getvalue())
-        vision.assert_not_called()
+        vision.assert_called_once()
         self.assertEqual(fake.updated, [])
 
     def test_tag_empty_vl_result_fails_without_write(self):
@@ -886,7 +1093,16 @@ class MoodtagTests(unittest.TestCase):
 
     def test_tag_force_overwrites_existing_metadata(self):
         fake, tmp = make_fake_eagle()
-        argv = ["tag", "--board", "Board", "--mock-vl", "--write", "--force"]
+        argv = [
+            "tag",
+            "--board",
+            "Board",
+            "--mock-vl",
+            "--profile",
+            "editorial",
+            "--write",
+            "--force",
+        ]
         try:
             with mock.patch.object(moodtag, "EagleClient", return_value=fake):
                 with redirect_stdout(io.StringIO()):
@@ -960,6 +1176,102 @@ class MoodtagTests(unittest.TestCase):
         self.assertEqual([item_id for item_id, _, _ in fake.updated], ["I1", "I3"])
         self.assertIn("Brief: first", fake.updated[0][2])
         self.assertIn("Brief: second", fake.updated[1][2])
+
+    def test_tag_stops_before_parallel_requests_on_provider_authentication_failure(
+        self,
+    ):
+        calls = []
+
+        class FatalAuthVision:
+            last_provider_name = ""
+            last_provider_base_url = ""
+            last_provider_model = ""
+            last_provider_attempts = []
+
+            def analyze(self, image, taxonomy, retries, max_tags=15):
+                del image, taxonomy, retries, max_tags
+                calls.append(True)
+                endpoint = ProviderEndpoint(
+                    name="fallback",
+                    base_url="https://api.n1n.ai/v1",
+                    api_key="test-key",
+                    model="vision",
+                )
+                error = ProviderHTTPError(
+                    401,
+                    "https://api.n1n.ai/v1/chat/completions",
+                    '{"error":{"message":"invalid token"}}',
+                )
+                raise ProviderAuthenticationError(endpoint, error)
+
+        fake, tmp = make_fake_eagle(pending_count=3)
+        buffer = io.StringIO()
+        try:
+            with mock.patch.object(moodtag, "EagleClient", return_value=fake):
+                with mock.patch.object(
+                    moodtag, "make_vision_client", return_value=FatalAuthVision()
+                ):
+                    with redirect_stdout(buffer):
+                        code = moodtag.main(
+                            [
+                                "tag",
+                                "--board",
+                                "Board",
+                                "--write",
+                                "--concurrency",
+                                "4",
+                            ]
+                        )
+        finally:
+            tmp.cleanup()
+
+        self.assertEqual(code, 1)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(fake.updated, [])
+        self.assertIn("Provider authentication failed: fallback", buffer.getvalue())
+        self.assertIn("Stopping run.", buffer.getvalue())
+        logs = sorted(Path(self._log_tmp.name).glob("moodtag-*.jsonl"))
+        records = [
+            json.loads(line)
+            for line in logs[0].read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        self.assertEqual(
+            [record["event"] for record in records][-2:],
+            ["run_aborted", "run_complete"],
+        )
+        self.assertTrue(records[-1]["aborted"])
+
+    def test_tag_skips_unsupported_media_without_reading_thumbnail(self):
+        video = moodtag.EagleItem(
+            id="VIDEO",
+            name="clip",
+            ext="mp4",
+            tags=[],
+            folders=["B1"],
+            annotation="",
+        )
+        fake = FakeEagle([video], {})
+        buffer = io.StringIO()
+        with mock.patch.object(moodtag, "EagleClient", return_value=fake):
+            with redirect_stdout(buffer):
+                code = moodtag.main(["tag", "--board", "Board", "--mock-vl", "--write"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(fake.updated, [])
+        self.assertIn(
+            "skip\tVIDEO\tclip\tunsupported media type: mp4", buffer.getvalue()
+        )
+        self.assertIn("Skipped: 1", buffer.getvalue())
+        self.assertIn("Failed: 0", buffer.getvalue())
+        logs = sorted(Path(self._log_tmp.name).glob("moodtag-*.jsonl"))
+        records = [
+            json.loads(line)
+            for line in logs[0].read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        skipped = [record for record in records if record["event"] == "item_skipped"]
+        self.assertEqual(skipped[0]["reason"], "unsupported media type: mp4")
 
     def test_tag_resume_skips_items_written_by_partial_run(self):
         fake, tmp = make_fake_eagle(pending_count=3)
@@ -1148,6 +1460,26 @@ class MoodtagTests(unittest.TestCase):
         self.assertEqual(payload["response_format"], {"type": "json_object"})
         self.assertIn("JSON", payload["messages"][0]["content"])
         self.assertIn("JSON", payload["messages"][1]["content"][1]["text"])
+
+    def test_vision_payload_uses_editorial_profile_with_shared_taxonomy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "image.png"
+            write_png(image)
+            client = moodtag.VisionClient(
+                base_url="https://example.test/v1",
+                model="qwen3.5-122b-a10b",
+                api_key="sk-testSecretForPayload123456",
+                profile="editorial",
+            )
+            payload = client.build_payload(image, {"medium": ["photo"]})
+
+        self.assertEqual(client.profile, "editorial")
+        self.assertIn(
+            "commercial editorial portrait", payload["messages"][0]["content"]
+        )
+        user_text = payload["messages"][1]["content"][1]["text"]
+        self.assertIn("brand evidence", user_text)
+        self.assertIn("medium: photo", user_text)
 
     def test_export_context_subcommand_prints_markdown(self):
         fake, tmp = make_fake_eagle(processed_first=True)
@@ -1394,6 +1726,123 @@ class MoodtagTests(unittest.TestCase):
 
         self.assertEqual(requests, ["primary"])
 
+    def test_vision_client_fallbacks_from_arrearage(self):
+        primary_error = ProviderHTTPError(
+            400,
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            '{"code":"Arrearage","message":"account balance overdue"}',
+        )
+        fallback_response = {
+            "choices": [
+                {"message": {"content": json.dumps(analysis_payload("fallback"))}}
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "image.png"
+            write_png(image)
+            client = moodtag.VisionClient(
+                base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                fallback_base_url="https://api.n1n.ai/v1",
+                model="primary-vision",
+                fallback_model="fallback-vision",
+                api_key="primary-key",
+                fallback_api_key="fallback-key",
+            )
+            with mock.patch(
+                "moodtag_core.provider.http_request",
+                side_effect=[primary_error, fallback_response],
+            ) as request:
+                result = client.analyze(image, {"medium": ["photo"]}, retries=2)
+
+        self.assertEqual(result.brief, "fallback")
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(
+            [attempt.name for attempt in client.last_provider_attempts],
+            ["primary", "fallback"],
+        )
+        self.assertEqual(
+            [attempt.ok for attempt in client.last_provider_attempts], [False, True]
+        )
+
+    def test_vision_client_stops_on_primary_authentication_failure(self):
+        error = ProviderHTTPError(
+            401,
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            '{"error":{"message":"invalid token"}}',
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "image.png"
+            write_png(image)
+            client = moodtag.VisionClient(
+                base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                fallback_base_url="https://api.n1n.ai/v1",
+                model="primary-vision",
+                api_key="primary-key",
+                fallback_api_key="fallback-key",
+            )
+            with mock.patch(
+                "moodtag_core.provider.http_request", side_effect=error
+            ) as request:
+                with self.assertRaises(ProviderAuthenticationError) as raised:
+                    client.analyze(image, {"medium": ["photo"]}, retries=2)
+
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(raised.exception.endpoint.name, "primary")
+        self.assertIn("DASHSCOPE_API_KEY", str(raised.exception))
+        self.assertEqual(len(client.last_provider_attempts), 1)
+
+    def test_n1n_primary_authentication_failure_names_n1n_key(self):
+        endpoint = ProviderEndpoint(
+            name="primary",
+            base_url="https://api.n1n.ai/v1",
+            api_key="test-key",
+            model="vision",
+        )
+        error = ProviderHTTPError(
+            401,
+            "https://api.n1n.ai/v1/chat/completions",
+            '{"error":{"message":"invalid token"}}',
+        )
+        authentication_error = ProviderAuthenticationError(endpoint, error)
+
+        self.assertIn("MOODTAG_API_KEY or VL_API_KEY", str(authentication_error))
+        self.assertNotIn("DASHSCOPE_API_KEY", str(authentication_error))
+
+    def test_vision_client_stops_on_fallback_authentication_failure(self):
+        primary_error = ProviderHTTPError(
+            400,
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            '{"code":"Arrearage","message":"account balance overdue"}',
+        )
+        fallback_error = ProviderHTTPError(
+            401,
+            "https://api.n1n.ai/v1/chat/completions",
+            '{"error":{"message":"invalid token"}}',
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "image.png"
+            write_png(image)
+            client = moodtag.VisionClient(
+                base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                fallback_base_url="https://api.n1n.ai/v1",
+                model="primary-vision",
+                api_key="primary-key",
+                fallback_api_key="fallback-key",
+            )
+            with mock.patch(
+                "moodtag_core.provider.http_request",
+                side_effect=[primary_error, fallback_error],
+            ) as request:
+                with self.assertRaises(ProviderAuthenticationError) as raised:
+                    client.analyze(image, {"medium": ["photo"]}, retries=2)
+
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(raised.exception.endpoint.name, "fallback")
+        self.assertIn("MOODTAG_API_KEY", str(raised.exception))
+        self.assertEqual(
+            [attempt.status for attempt in client.last_provider_attempts], [400, 401]
+        )
+
     def test_vision_client_skips_primary_during_cooldown(self):
         requests = []
 
@@ -1423,6 +1872,7 @@ class MoodtagTests(unittest.TestCase):
                             "primary": {
                                 "disabled_until": moodtag.time.time() + 1800,
                                 "reason": "test",
+                                "base_url": "http://127.0.0.1:1/v1",
                             }
                         }
                     ),
