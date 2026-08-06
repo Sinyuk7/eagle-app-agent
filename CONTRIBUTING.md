@@ -18,6 +18,28 @@ The package name is `eagle-app-agent`; the installed command is `moodtag`.
 | `tests/` | Unit tests with fake Eagle and mocked model behavior. |
 | `.env.example` | Local environment template. |
 
+## Build
+
+新发布产物标准构建命令：
+
+```sh
+uv build --no-sources
+```
+
+产物写入 `dist/`：
+
+- `dist/eagle_app_agent-0.1.5-py3-none-any.whl`
+- `dist/eagle_app_agent-0.1.5.tar.gz`
+
+完整发布前检查脚本：
+
+```sh
+scripts/release_check.sh
+```
+
+它会清理旧产物、构建 wheel/sdist、运行 `twine check` 和 wheel CLI smoke。当前快速本地构建也可用 `uv build`。
+
+
 ## Development Setup
 
 Create a local virtual environment, install the project in editable mode, and
