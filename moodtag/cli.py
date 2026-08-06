@@ -1156,6 +1156,12 @@ def analyze_tag_item(
     preview_ms = 0
     vision_ms = 0
     source_strategy = ""
+    source_started = item_started
+    preview_started: float | None = None
+    vision_started: float | None = None
+    source_lookup_finished = False
+    preview_finished = False
+    vision_finished = False
     try:
         source_started = time.monotonic()
         original: Path | None = None
@@ -1167,12 +1173,16 @@ def analyze_tag_item(
                 source_strategy = "library_root"
         if original is None:
             source_strategy = "thumbnail_fallback"
-            original = locate_original_from_thumbnail(eagle.thumbnail_path(item.id), item)
+            original = locate_original_from_thumbnail(
+                eagle.thumbnail_path(item.id), item
+            )
         source_lookup_ms = elapsed_ms_since(source_started)
+        source_lookup_finished = True
 
         preview_started = time.monotonic()
         with temporary_preview(original, image_edge=image_edge) as preview:
             preview_ms = elapsed_ms_since(preview_started)
+            preview_finished = True
             vision_started = time.monotonic()
             result = vision.analyze(
                 preview.path,
@@ -1181,6 +1191,7 @@ def analyze_tag_item(
                 max_tags=max_tags,
             )
             vision_ms = elapsed_ms_since(vision_started)
+            vision_finished = True
         validate_vl_result(result)
         tags, _rejected = reconcile_tags(result, taxonomy, max_tags=max_tags)
         analysis_total_ms = elapsed_ms_since(item_started)
@@ -1201,6 +1212,12 @@ def analyze_tag_item(
             elapsed_ms=analysis_total_ms,
         )
     except Exception as exc:  # noqa: BLE001 - per-item isolation
+        if not source_lookup_finished:
+            source_lookup_ms = elapsed_ms_since(source_started)
+        if preview_started is not None and not preview_finished:
+            preview_ms = elapsed_ms_since(preview_started)
+        if vision_started is not None and not vision_finished:
+            vision_ms = elapsed_ms_since(vision_started)
         analysis_total_ms = elapsed_ms_since(item_started)
         return TagItemResult(
             index=index,
@@ -1903,9 +1920,7 @@ def command_guided_tag(args: argparse.Namespace) -> int:
             )
             run_log.write(
                 "item_failed",
-                item=item_log_record(
-                    result.item, index=result.index, total=total
-                ),
+                item=item_log_record(result.item, index=result.index, total=total),
                 error=redact(str(result.error)),
                 provider_attempts=result.provider_attempts,
                 timings_ms=merge_timings(result.timings_ms),
@@ -1925,28 +1940,25 @@ def command_guided_tag(args: argparse.Namespace) -> int:
                 annotation=result.annotation,
             )
         except Exception as exc:  # noqa: BLE001 - per-item isolation
+            write_ms = elapsed_ms_since(write_started)
+            timings_ms = merge_timings(result.timings_ms, write_ms=write_ms)
             print(
-                f"[{result.index}/{total}] failed\t{result.item.id}\t"
-                f"{redact(str(exc))}"
+                f"[{result.index}/{total}] failed\t{result.item.id}\t{redact(str(exc))}"
             )
             run_log.write(
                 "item_failed",
-                item=item_log_record(
-                    result.item, index=result.index, total=total
-                ),
+                item=item_log_record(result.item, index=result.index, total=total),
                 error=redact(str(exc)),
                 provider=result.provider,
                 provider_attempts=result.provider_attempts,
-                timings_ms=merge_timings(
-                    result.timings_ms, write_ms=elapsed_ms_since(write_started)
-                ),
+                timings_ms=timings_ms,
                 source_strategy=result.source_strategy,
                 elapsed_ms=result.elapsed_ms,
             )
             record_timing_totals(
                 timing_totals_ms,
                 timing_item_counts,
-                merge_timings(result.timings_ms, write_ms=elapsed_ms_since(write_started)),
+                timings_ms,
             )
             return 0, 1
         timings_ms = merge_timings(
