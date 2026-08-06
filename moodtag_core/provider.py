@@ -1,10 +1,11 @@
-"""OpenAI-compatible chat completion provider for moodtag."""
+"""Single-endpoint OpenAI-compatible protocol adapters for moodtag."""
 
 from __future__ import annotations
 
 import base64
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -16,9 +17,9 @@ from typing import Any
 from .contract import (
     DEFAULT_MAX_TOKENS,
     DEFAULT_NO_RESPONSE_FORMAT,
-    DEFAULT_PROVIDER_COOLDOWN_SECONDS,
     DEFAULT_TEMPERATURE,
     DEFAULT_TOP_P,
+    SUPPORTED_PROTOCOLS,
     CoreError,
     MoodtagAnalysis,
 )
@@ -26,30 +27,13 @@ from .prompts import read_system_prompt, render_user_prompt, resolve_profile
 from .response import parse_analysis_response
 
 DEFAULT_USER_AGENT = "moodtag/0.1"
-PRIMARY_PROVIDER_NAME = "primary"
-FALLBACK_PROVIDER_NAME = "fallback"
-FALLBACK_STATUS_CODES = {429}
-NON_FALLBACK_STATUS_CODES = {400, 401, 403, 404}
-FALLBACK_ERROR_PATTERNS = (
-    "arrearage",
-    "allocationquota",
-    "commoditynotpurchased",
-    "freetier",
-    "free allocated quota exceeded",
-    "insufficient_quota",
-    "postpaidbilloverdue",
-    "prepaidbilloverdue",
-    "quota",
-    "rate limit",
-    "rate_limit",
-    "throttling",
-)
 
 
-def redact(text: str) -> str:
-    import re
-
-    return re.sub(r"\bsk-[A-Za-z0-9_\-]{8,}\b", "sk-REDACTED", str(text))
+def redact(text: str, secret: str | None = None) -> str:
+    value = str(text)
+    if secret:
+        value = value.replace(secret, "REDACTED")
+    return re.sub(r"\bsk-[A-Za-z0-9_\-]{8,}\b", "sk-REDACTED", value)
 
 
 def url_join(base: str, path: str) -> str:
@@ -58,15 +42,19 @@ def url_join(base: str, path: str) -> str:
 
 @dataclass(frozen=True)
 class ProviderEndpoint:
-    name: str
+    protocol: str
     base_url: str
     api_key: str | None
     model: str
 
+    @property
+    def url(self) -> str:
+        return protocol_url(self.base_url, self.protocol)
+
 
 @dataclass(frozen=True)
 class ProviderAttempt:
-    name: str
+    protocol: str
     base_url: str
     model: str
     ok: bool
@@ -76,34 +64,34 @@ class ProviderAttempt:
 
 
 class ProviderHTTPError(CoreError):
-    def __init__(self, status: int, url: str, body: str) -> None:
+    def __init__(
+        self, status: int, url: str, body: str, *, secret: str | None = None
+    ) -> None:
         self.status = status
         self.url = url
-        self.body = body
-        self.error_code, self.error_message = parse_provider_error(body)
-        detail = body[:800]
-        super().__init__(f"HTTP {status} from {url}: {redact(detail)}")
+        self.body = redact(body, secret)
+        self.error_code, self.error_message = parse_provider_error(self.body)
+        super().__init__(f"HTTP {status} from {url}: {self.body[:800]}")
 
 
 class ProviderAuthenticationError(ProviderHTTPError):
-    """An API key was accepted as configured but rejected by a provider."""
+    """The configured credential was rejected by the endpoint."""
 
     def __init__(self, endpoint: ProviderEndpoint, error: ProviderHTTPError) -> None:
-        super().__init__(error.status, error.url, error.body)
+        super().__init__(error.status, error.url, error.body, secret=endpoint.api_key)
         self.endpoint = endpoint
         host = urllib.parse.urlsplit(endpoint.base_url).netloc or endpoint.base_url
-        key_name = api_key_environment_for_base_url(endpoint.base_url)
         self.args = (
-            f"Provider authentication failed: {endpoint.name} ({host}) rejected "
-            f"{key_name} (HTTP {error.status}). Stopping run.",
+            f"Model authentication failed for {endpoint.protocol} endpoint ({host}) "
+            f"using MOODTAG_API_KEY (HTTP {error.status}). Update `moodtag config auth`.",
         )
 
 
 class ProviderNetworkError(CoreError):
-    def __init__(self, url: str, reason: Any) -> None:
+    def __init__(self, url: str, reason: Any, *, secret: str | None = None) -> None:
         self.url = url
-        self.reason = reason
-        super().__init__(f"Cannot reach {url}: {reason}")
+        self.reason = redact(reason, secret)
+        super().__init__(f"Cannot reach {url}: {self.reason}")
 
 
 def parse_provider_error(body: str) -> tuple[str, str]:
@@ -115,143 +103,84 @@ def parse_provider_error(body: str) -> tuple[str, str]:
         return "", body
     error = data.get("error")
     if isinstance(error, dict):
-        code = error.get("code") or error.get("type") or ""
-        message = error.get("message") or ""
-        return str(code), str(message)
-    code = data.get("code") or data.get("Code") or ""
-    message = data.get("message") or data.get("Message") or data.get("error") or ""
-    return str(code), str(message)
-
-
-def is_n1n_base_url(base_url: str) -> bool:
-    hostname = urllib.parse.urlsplit(base_url).hostname or ""
-    return hostname.lower() == "api.n1n.ai"
-
-
-def api_key_environment_for_base_url(base_url: str) -> str:
-    if is_n1n_base_url(base_url):
-        return "MOODTAG_API_KEY or VL_API_KEY"
-    return "DASHSCOPE_API_KEY"
-
-
-def provider_cache_path() -> Path:
-    override = os.environ.get("MOODTAG_PROVIDER_STATE", "").strip()
-    if override:
-        return Path(override).expanduser()
-    xdg_home = os.environ.get("XDG_CACHE_HOME", "").strip()
-    root = Path(xdg_home).expanduser() if xdg_home else Path.home() / ".cache"
-    return root / "moodtag" / "provider-state.json"
-
-
-def load_provider_state(path: Path | None = None) -> dict[str, Any]:
-    path = path or provider_cache_path()
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return {}
-    except OSError:
-        return {}
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def save_provider_state(state: dict[str, Any], path: Path | None = None) -> None:
-    path = path or provider_cache_path()
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
+        return str(error.get("code") or error.get("type") or ""), str(
+            error.get("message") or ""
         )
-    except OSError:
-        return
+    return str(data.get("code") or data.get("Code") or ""), str(
+        data.get("message") or data.get("Message") or data.get("error") or ""
+    )
 
 
-def provider_in_cooldown(
-    name: str, now: float | None = None, *, base_url: str = ""
-) -> bool:
-    now = time.time() if now is None else now
-    entry = load_provider_state().get(name)
-    if not isinstance(entry, dict):
-        return False
-    recorded_base_url = str(entry.get("base_url", "")).strip().rstrip("/")
-    requested_base_url = base_url.strip().rstrip("/")
-    if requested_base_url and recorded_base_url != requested_base_url:
-        return False
-    try:
-        disabled_until = float(entry.get("disabled_until", 0))
-    except (TypeError, ValueError):
-        return False
-    return disabled_until > now
+def validate_protocol(protocol: str) -> str:
+    value = str(protocol or "").strip().lower()
+    if value not in SUPPORTED_PROTOCOLS:
+        allowed = ", ".join(SUPPORTED_PROTOCOLS)
+        raise CoreError(
+            f"Unsupported model protocol: {value or '-'} (expected {allowed})"
+        )
+    return value
 
 
-def record_provider_cooldown(
-    name: str,
-    error: Exception,
-    *,
-    cooldown_seconds: int = DEFAULT_PROVIDER_COOLDOWN_SECONDS,
-    now: float | None = None,
-    base_url: str = "",
-) -> None:
-    if cooldown_seconds <= 0:
-        return
-    now = time.time() if now is None else now
-    state = load_provider_state()
-    state[name] = {
-        "disabled_until": now + cooldown_seconds,
-        "reason": redact(str(error))[:500],
-        "base_url": base_url.strip().rstrip("/"),
-    }
-    save_provider_state(state)
+def normalize_base_url(base_url: str, protocol: str) -> str:
+    protocol = validate_protocol(protocol)
+    value = str(base_url or "").strip().rstrip("/")
+    if not value:
+        raise CoreError("Missing model base URL. Run `moodtag config setup`.")
+    parts = urllib.parse.urlsplit(value)
+    if parts.scheme not in {"http", "https"} or not parts.netloc:
+        raise CoreError("Model base URL must be an absolute http(s) URL")
+    if parts.username or parts.password or parts.query or parts.fragment:
+        raise CoreError(
+            "Model base URL must not contain credentials, query, or fragment"
+        )
+    path = parts.path.rstrip("/")
+    expected = "/chat/completions" if protocol == "chat" else "/responses"
+    other = "/responses" if protocol == "chat" else "/chat/completions"
+    if path.endswith(other):
+        raise CoreError(
+            f"Model base URL uses endpoint for protocol {other.lstrip('/')}"
+        )
+    if path.endswith(expected):
+        return urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, "", ""))
+    return urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, "", ""))
 
 
-def is_fallback_error(error: Exception) -> bool:
-    if isinstance(error, ProviderNetworkError):
-        return True
-    if isinstance(error, ProviderHTTPError):
-        if error.status >= 500 or error.status in FALLBACK_STATUS_CODES:
-            return True
-        if error.status in NON_FALLBACK_STATUS_CODES:
-            haystack = " ".join(
-                [error.error_code, error.error_message, error.body]
-            ).lower()
-            return any(pattern in haystack for pattern in FALLBACK_ERROR_PATTERNS)
-    return False
+def protocol_url(base_url: str, protocol: str) -> str:
+    protocol = validate_protocol(protocol)
+    normalized = normalize_base_url(base_url, protocol)
+    parts = urllib.parse.urlsplit(normalized)
+    path = parts.path.rstrip("/")
+    expected = "/chat/completions" if protocol == "chat" else "/responses"
+    if path.endswith(expected):
+        return normalized
+    if path in {"", "/"}:
+        path = "/v1"
+    elif path.endswith("/v1"):
+        pass
+    return urllib.parse.urlunsplit(
+        (parts.scheme, parts.netloc, path + expected, "", "")
+    )
 
 
 def chat_completions_url(base_url: str) -> str:
-    base_url = base_url.strip().rstrip("/")
-    if not base_url:
-        raise CoreError("Missing --base-url value")
-    parts = urllib.parse.urlsplit(base_url)
-    path = parts.path.rstrip("/")
-    if path.endswith("/chat/completions"):
-        return base_url
-    if path.endswith("/v1"):
-        return url_join(base_url, "/chat/completions")
-    if path in {"", "/"}:
-        v1_base = urllib.parse.urlunsplit((parts.scheme, parts.netloc, "/v1", "", ""))
-        return url_join(v1_base, "/chat/completions")
-    return url_join(base_url, "/chat/completions")
+    return protocol_url(base_url, "chat")
+
+
+def responses_url(base_url: str) -> str:
+    return protocol_url(base_url, "responses")
 
 
 def models_url(base_url: str) -> str:
-    base_url = base_url.strip().rstrip("/")
-    if not base_url:
-        raise CoreError("Missing --base-url value")
-    parts = urllib.parse.urlsplit(base_url)
+    normalized = normalize_base_url(base_url, "chat")
+    parts = urllib.parse.urlsplit(normalized)
     path = parts.path.rstrip("/")
-    if path.endswith("/models"):
-        return base_url
-    if path.endswith("/v1"):
-        return url_join(base_url, "/models")
+    if path.endswith("/chat/completions"):
+        path = path[: -len("/chat/completions")]
     if path in {"", "/"}:
-        v1_base = urllib.parse.urlunsplit((parts.scheme, parts.netloc, "/v1", "", ""))
-        return url_join(v1_base, "/models")
-    return url_join(base_url, "/models")
+        path = "/v1"
+    return urllib.parse.urlunsplit(
+        (parts.scheme, parts.netloc, path + "/models", "", "")
+    )
 
 
 def http_request(
@@ -261,6 +190,7 @@ def http_request(
     headers: dict[str, str] | None = None,
     json_body: Any | None = None,
     timeout: int = 60,
+    secret: str | None = None,
 ) -> Any:
     request_headers = dict(headers or {})
     request_headers.setdefault(
@@ -275,10 +205,13 @@ def http_request(
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise ProviderHTTPError(exc.code, url, detail) from exc
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")
+        except OSError:
+            detail = ""
+        raise ProviderHTTPError(exc.code, url, detail, secret=secret) from exc
     except urllib.error.URLError as exc:
-        raise ProviderNetworkError(url, exc.reason) from exc
+        raise ProviderNetworkError(url, exc.reason, secret=secret) from exc
     if not raw:
         return None
     try:
@@ -291,194 +224,148 @@ class VisionClient:
     def __init__(
         self,
         *,
+        protocol: str,
         base_url: str,
-        fallback_base_url: str = "",
         model: str,
         api_key: str | None,
-        fallback_model: str | None = None,
-        fallback_api_key: str | None = None,
-        cooldown_seconds: int = DEFAULT_PROVIDER_COOLDOWN_SECONDS,
         response_format: bool = not DEFAULT_NO_RESPONSE_FORMAT,
         temperature: float = DEFAULT_TEMPERATURE,
         top_p: float = DEFAULT_TOP_P,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         profile: str = "default",
     ) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.fallback_base_url = fallback_base_url.rstrip("/")
-        self.model = model
-        self.fallback_model = fallback_model if fallback_model is not None else model
+        self.protocol = validate_protocol(protocol)
+        self.base_url = normalize_base_url(base_url, self.protocol)
+        self.model = str(model or "").strip()
         self.api_key = api_key
-        self.fallback_api_key = (
-            fallback_api_key if fallback_api_key is not None else api_key
-        )
-        self.cooldown_seconds = cooldown_seconds
         self.response_format = response_format
         self.temperature = temperature
         self.top_p = top_p
         self.max_tokens = max_tokens
         self.profile = resolve_profile(profile).id
-        self.last_provider_name = ""
-        self.last_provider_base_url = ""
-        self.last_provider_model = ""
-        self.last_provider_attempts: list[ProviderAttempt] = []
+        self.last_endpoint_protocol = self.protocol
+        self.last_endpoint_base_url = self.base_url
+        self.last_endpoint_model = self.model
+        self.last_attempts: list[ProviderAttempt] = []
 
     def base_urls(self) -> list[str]:
-        return [
-            endpoint.base_url for endpoint in self.endpoints(include_cooldown=False)
-        ]
+        return [self.base_url]
 
-    def endpoints(self, *, include_cooldown: bool = True) -> list[ProviderEndpoint]:
-        endpoints: list[ProviderEndpoint] = []
-        seen: set[tuple[str, str | None, str]] = set()
-        for name, raw_url, api_key, model in (
-            (PRIMARY_PROVIDER_NAME, self.base_url, self.api_key, self.model),
-            (
-                FALLBACK_PROVIDER_NAME,
-                self.fallback_base_url,
-                self.fallback_api_key,
-                self.fallback_model,
-            ),
-        ):
-            url = raw_url.strip().rstrip("/")
-            key = (url, api_key, model)
-            if not url or key in seen:
-                continue
-            if include_cooldown and name == PRIMARY_PROVIDER_NAME:
-                if provider_in_cooldown(PRIMARY_PROVIDER_NAME, base_url=url):
-                    continue
-            endpoints.append(
-                ProviderEndpoint(
-                    name=name,
-                    base_url=url,
-                    api_key=api_key,
-                    model=model,
-                )
-            )
-            seen.add(key)
-        return endpoints
+    def endpoint(self) -> ProviderEndpoint:
+        return ProviderEndpoint(self.protocol, self.base_url, self.api_key, self.model)
 
     def build_payload(
-        self, image: Path, taxonomy: dict[str, list[str]], model: str | None = None
+        self, image: Path, taxonomy: dict[str, list[str]]
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "model": model or self.model,
+        system = read_system_prompt(profile=self.profile)
+        prompt = render_user_prompt(taxonomy, profile=self.profile)
+        if self.protocol == "chat":
+            payload: dict[str, Any] = {
+                "model": self.model,
+                "store": False,
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+                "max_tokens": self.max_tokens,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": file_to_data_url(image, "image/jpeg")
+                                },
+                            },
+                        ],
+                    },
+                ],
+            }
+            if self.response_format:
+                payload["response_format"] = {"type": "json_object"}
+            return payload
+        payload = {
+            "model": self.model,
+            "store": False,
             "temperature": self.temperature,
             "top_p": self.top_p,
-            "max_tokens": self.max_tokens,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": read_system_prompt(profile=self.profile),
-                },
+            "max_output_tokens": self.max_tokens,
+            "input": [
+                {"role": "system", "content": [{"type": "input_text", "text": system}]},
                 {
                     "role": "user",
                     "content": [
+                        {"type": "input_text", "text": prompt},
                         {
-                            "type": "image_url",
-                            "image_url": {"url": file_to_data_url(image, "image/jpeg")},
-                        },
-                        {
-                            "type": "text",
-                            "text": render_user_prompt(taxonomy, profile=self.profile),
+                            "type": "input_image",
+                            "image_url": file_to_data_url(image, "image/jpeg"),
                         },
                     ],
                 },
             ],
         }
         if self.response_format:
-            payload["response_format"] = {"type": "json_object"}
+            payload["text"] = {"format": {"type": "json_object"}}
         return payload
 
     def analyze(
         self, image: Path, taxonomy: dict[str, list[str]], retries: int, max_tags: int
     ) -> MoodtagAnalysis:
-        self.last_provider_name = ""
-        self.last_provider_base_url = ""
-        self.last_provider_model = ""
-        self.last_provider_attempts = []
-        endpoints = self.endpoints()
-        if not endpoints:
-            raise CoreError("Missing --base-url value")
+        self.last_attempts = []
+        endpoint = self.endpoint()
+        if not endpoint.api_key:
+            raise CoreError("Missing MOODTAG_API_KEY. Run `moodtag config auth`.")
+        if not endpoint.model:
+            raise CoreError("Missing model. Run `moodtag config setup`.")
         last_error: Exception | None = None
         for attempt in range(retries + 1):
-            response_error = False
-            for endpoint in endpoints:
-                if not endpoint.api_key:
-                    last_error = CoreError(provider_missing_key_message(endpoint.name))
-                    self._record_attempt(endpoint, ok=False, error=last_error)
-                    if (
-                        endpoint.name == PRIMARY_PROVIDER_NAME
-                        and self.fallback_base_url
-                    ):
-                        continue
-                    raise last_error
-                try:
-                    started = time.monotonic()
-                    payload = self.build_payload(image, taxonomy, model=endpoint.model)
-                    data = http_request(
-                        "POST",
-                        chat_completions_url(endpoint.base_url),
-                        headers={
-                            "Accept": "application/json",
-                            "Authorization": f"Bearer {endpoint.api_key}",
-                        },
-                        json_body=payload,
-                        timeout=180,
-                    )
-                except Exception as exc:  # noqa: BLE001 - retry boundary
-                    last_error = exc
-                    self._record_attempt(
-                        endpoint,
-                        ok=False,
-                        error=exc,
-                        elapsed_ms=elapsed_ms_since(started),
-                    )
-                    if isinstance(exc, ProviderHTTPError) and exc.status in {401, 403}:
-                        raise ProviderAuthenticationError(endpoint, exc) from exc
-                    if endpoint.name == PRIMARY_PROVIDER_NAME and is_fallback_error(
-                        exc
-                    ):
-                        if self.fallback_base_url:
-                            record_provider_cooldown(
-                                PRIMARY_PROVIDER_NAME,
-                                exc,
-                                cooldown_seconds=self.cooldown_seconds,
-                                base_url=endpoint.base_url,
-                            )
-                            continue
-                    if isinstance(exc, ProviderHTTPError) and not is_fallback_error(
-                        exc
-                    ):
-                        raise exc
-                    continue
-                try:
-                    result = parse_analysis_response(data, taxonomy, max_tags=max_tags)
-                except CoreError as exc:
-                    last_error = exc
-                    self._record_attempt(
-                        endpoint,
-                        ok=False,
-                        error=exc,
-                        elapsed_ms=elapsed_ms_since(started),
-                    )
-                    response_error = True
-                    break
-                self.last_provider_name = endpoint.name
-                self.last_provider_base_url = endpoint.base_url
-                self.last_provider_model = endpoint.model
-                self._record_attempt(
-                    endpoint,
-                    ok=True,
-                    elapsed_ms=elapsed_ms_since(started),
+            started = time.monotonic()
+            try:
+                data = http_request(
+                    "POST",
+                    endpoint.url,
+                    headers={
+                        "Accept": "application/json",
+                        "Authorization": f"Bearer {endpoint.api_key}",
+                    },
+                    json_body=self.build_payload(image, taxonomy),
+                    timeout=180,
+                    secret=endpoint.api_key,
                 )
+                result = parse_analysis_response(data, taxonomy, max_tags=max_tags)
+            except ProviderHTTPError as exc:
+                last_error = exc
+                self._record_attempt(
+                    endpoint, ok=False, error=exc, elapsed_ms=elapsed_ms_since(started)
+                )
+                if exc.status in {401, 403}:
+                    raise ProviderAuthenticationError(endpoint, exc) from exc
+                if exc.status not in {429} and exc.status < 500:
+                    raise
+            except ProviderNetworkError as exc:
+                last_error = exc
+                self._record_attempt(
+                    endpoint, ok=False, error=exc, elapsed_ms=elapsed_ms_since(started)
+                )
+            except CoreError as exc:
+                self._record_attempt(
+                    endpoint, ok=False, error=exc, elapsed_ms=elapsed_ms_since(started)
+                )
+                raise
+            else:
+                self._record_attempt(
+                    endpoint, ok=True, elapsed_ms=elapsed_ms_since(started)
+                )
+                self.last_endpoint_protocol = endpoint.protocol
+                self.last_endpoint_base_url = endpoint.base_url
+                self.last_endpoint_model = endpoint.model
                 return result
-            if response_error and attempt < retries:
-                time.sleep(1.5 * (attempt + 1))
-                continue
             if attempt < retries:
                 time.sleep(1.5 * (attempt + 1))
-        raise CoreError(f"VL request failed: {redact(str(last_error))}")
+        raise CoreError(
+            f"Model request failed: {redact(str(last_error), endpoint.api_key)}"
+        )
 
     def _record_attempt(
         self,
@@ -489,26 +376,17 @@ class VisionClient:
         error: Exception | None = None,
     ) -> None:
         status = error.status if isinstance(error, ProviderHTTPError) else None
-        self.last_provider_attempts.append(
+        self.last_attempts.append(
             ProviderAttempt(
-                name=endpoint.name,
+                protocol=endpoint.protocol,
                 base_url=endpoint.base_url,
                 model=endpoint.model,
                 ok=ok,
                 elapsed_ms=elapsed_ms,
                 status=status,
-                error=redact(str(error))[:500] if error else "",
+                error=redact(str(error), endpoint.api_key)[:500] if error else "",
             )
         )
-
-
-def provider_missing_key_message(name: str) -> str:
-    if name == PRIMARY_PROVIDER_NAME:
-        return (
-            "Missing primary API key. Set DASHSCOPE_API_KEY, "
-            "or configure fallback with MOODTAG_API_KEY/VL_API_KEY."
-        )
-    return "Missing fallback API key. Set MOODTAG_API_KEY or VL_API_KEY."
 
 
 def elapsed_ms_since(started: float) -> int:

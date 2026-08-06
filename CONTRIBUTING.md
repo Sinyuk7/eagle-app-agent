@@ -54,17 +54,16 @@ that guided flow short: resolve board, show summary, confirm, then write.
 Store non-secret defaults with `moodtag config set`:
 
 ```sh
-moodtag config set --base-url https://dashscope.aliyuncs.com/compatible-mode/v1 \
-  --fallback-base-url https://api.n1n.ai/v1 \
-  --model qwen3.5-122b-a10b \
-  --fallback-model qwen3.5-122b-a10b
+moodtag config set --protocol responses \
+  --base-url https://your-model-service.example/v1 \
+  --model your-vision-model
+moodtag config auth
 ```
 
 Keep API keys in the environment or in a local `.env` file:
 
 ```sh
-export DASHSCOPE_API_KEY=...
-export MOODTAG_API_KEY=... # optional relay fallback
+export MOODTAG_API_KEY=...
 ```
 
 `moodtag` loads `~/.config/moodtag/.env` first, then the current working
@@ -77,29 +76,22 @@ Show the effective saved defaults:
 moodtag config
 ```
 
-Configuration precedence is:
-
-1. CLI flags
-2. Environment variables, `~/.config/moodtag/.env`, and current-directory `.env`
-3. User config
-4. Built-in defaults
-
-`moodtag config` / `moodtag config show` prints the effective model, base URLs,
-`env_file` path, and API-key readiness without printing the secrets
-themselves.
+Configuration precedence is inherited shell environment > user
+`~/.config/moodtag/.env` > current-directory `.env` > JSON config. The model
+tuple has no built-in endpoint/model default. `moodtag config show` prints the
+effective protocol, endpoint, model, `env_file` path, and key readiness without
+printing secrets. Use `moodtag config setup` for the complete interactive tuple
+or `moodtag config set` for non-secret updates.
 
 ## Settings
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `MOODTAG_EAGLE_API` | `http://localhost:41595` | Eagle desktop Web API URL. |
-| `MOODTAG_BASE_URL` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | Primary OpenAI-compatible vision API base URL. |
-| `MOODTAG_FALLBACK_BASE_URL` | `https://api.n1n.ai/v1` | Optional relay fallback base URL for retryable provider failures. |
-| `MOODTAG_MODEL` | `qwen3.5-122b-a10b` | Primary vision/chat model name. |
-| `MOODTAG_FALLBACK_MODEL` | `qwen3.5-122b-a10b` | Optional relay fallback model name. |
-| `DASHSCOPE_API_KEY` | empty | Primary Alibaba Cloud DashScope API key. |
-| `MOODTAG_API_KEY` | empty | Optional relay fallback API key. |
-| `VL_API_KEY` | empty | Backward-compatible fallback API key. |
+| `MOODTAG_PROTOCOL` | empty | `chat` or `responses`; no vendor default. |
+| `MOODTAG_BASE_URL` | empty | Single OpenAI-compatible model endpoint base URL. |
+| `MOODTAG_MODEL` | empty | Single vision model name. |
+| `MOODTAG_API_KEY` | empty | Single model API key. |
 | `MOODTAG_IMAGE_EDGE` | `768` | Preview image long edge sent to the model. |
 | `MOODTAG_CONCURRENCY` | `4` | Number of image analysis requests to run in parallel. |
 | `MOODTAG_MAX_TAGS` | `15` | Maximum Eagle tags written per item. |
@@ -111,8 +103,7 @@ themselves.
 | `MOODTAG_LOG_KEEP` | `50` | Number of newest `moodtag-*.jsonl` run logs to keep. |
 | `MOODTAG_NO_RESPONSE_FORMAT` | `false` | `false` sends JSON Mode. Set `true` only for providers that reject JSON Mode. |
 
-Useful single-run flags include `--eagle-api`, `--base-url`,
-`--fallback-base-url`, `--model`, `--profile`, `--image-edge`, `--concurrency`,
+Useful single-run flags include `--eagle-api`, `--profile`, `--image-edge`, `--concurrency`,
 `--max-tags`, `--limit`, `--retries`, `--temperature`, `--top-p`, `--max-tokens`,
 `--response-format`, and `--no-response-format`.
 
@@ -121,27 +112,20 @@ Useful single-run flags include `--eagle-api`, `--base-url`,
 taxonomy. Taxonomy is not a runtime override because prompt contract and allowed tags
 must remain aligned.
 
-## Provider Guidance
+## Model Endpoint Guidance
 
 Maintainers should prefer Qwen3.5-class vision-capable models, or stronger
-models, for the configured Moodtag provider chain. The current recommended
-default for both primary and fallback routes is:
+models for the configured Moodtag endpoint. There is no built-in model default;
+choose a vision-capable model supported by your service.
 
 ```text
-qwen3.5-122b-a10b
+your-vision-model
 ```
 
-The primary provider uses `DASHSCOPE_API_KEY`. On network errors, HTTP 5xx,
-HTTP 429, or recognizable quota/billing throttling failures, `moodtag` falls
-back to `MOODTAG_FALLBACK_BASE_URL` with `MOODTAG_API_KEY`/`VL_API_KEY`. After a
-primary fallback-class failure, the primary provider is skipped for 1800 seconds
-using a local cache entry under the user cache directory.
-
-`moodtag tag` prints the configured provider chain at startup and appends the
-actual provider/model/host to each processed item line. It also writes a JSONL
-run log with full provider base URLs, provider attempts, item status,
-retry/fallback errors, and write status; API keys and `sk-*` secrets are
-redacted, and request image/base64 payloads are not logged.
+`moodtag tag` sends every request to one configured endpoint. Retryable failures
+retry that same endpoint; there is no endpoint routing or cooldown state. Runtime
+telemetry records protocol, endpoint host/path, model, attempts, timings, and
+source strategy, never credentials or request payloads.
 
 Avoid using speed-first small/flash models such as `qwen3-vl-flash` as the
 default write-path model unless a maintainer has revalidated them against real
@@ -279,7 +263,7 @@ metadata:
 
 ```sh
 moodtag status --board '<folder-id-or-name>'
-moodtag tag --board '<folder-id-or-name>' --mock-vl --limit 1
+moodtag tag --board '<folder-id-or-name>' --mock-model --limit 1
 MOODTAG_API_KEY=... moodtag tag --board '<folder-id-or-name>' --limit 1
 ```
 
@@ -320,19 +304,53 @@ to simulate interruption, resumes remaining items, then runs the batch again to
 verify repeat execution skips already processed items.
 
 ```sh
-MOODTAG_API_KEY=... uv run python scripts/e2e_live_batch.py --board '<folder-id-or-name>'
+MOODTAG_API_KEY=... uv run python scripts/e2e_live_batch.py \
+  --board '<folder-id-or-name>' \
+  --protocol responses \
+  --base-url https://model-service.example/v1 \
+  --model vision-model
 ```
 
-The default provider contract is:
+The model contract is:
 
-- model: `qwen3.5-122b-a10b`
-- primary base URL: `https://dashscope.aliyuncs.com/compatible-mode/v1`
-- fallback base URL: `https://api.n1n.ai/v1`
-- image part before text part
+- one configured protocol: `chat` or `responses`
+- one configured base URL and model
+- image plus prompt content in protocol-specific wire shape
 - `temperature=0.6`
 - `top_p=0.85`
-- `max_tokens=1028`
+- `max_tokens=1028` (`max_output_tokens` for Responses)
 - JSON response format unless `--no-response-format` is passed
+
+### Fixed protocol matrix
+
+`scripts/e2e_protocol_matrix.py` exercises both deployed protocol shapes against
+the disposable Eagle folder `MSHGWFME8L6SJ`:
+
+- Responses: `gpt-5.6-luna` through `https://sub2.de5.net/v1/responses`
+- Chat Completions: `qwen3.5-122b-a10b` through `https://llm-api.net/v1/chat/completions`
+
+API keys are runtime-only. Do not add them to source files, command arguments,
+reports, or committed `.env` files. Set the two matrix-specific variables in the
+current shell, then run:
+
+```sh
+export MOODTAG_E2E_RESPONSES_API_KEY='...'
+export MOODTAG_E2E_CHAT_API_KEY='...'
+
+uv run python scripts/e2e_protocol_matrix.py --plan
+uv run python scripts/e2e_protocol_matrix.py \
+  --confirm-reset MSHGWFME8L6SJ
+```
+
+This is destructive. Before each profile, the matrix runs `reset --write` and
+clears all Eagle tags and annotations in the confirmed folder. With the current
+five-item test folder, each profile writes two items, resumes the remaining
+three, then repeats the full run and asserts all five items are skipped. The
+second Chat profile remains written after the matrix completes.
+
+Each child report records the public protocol, normalized endpoint, model,
+state timeline, and run counts. The matrix rejects any report containing either
+configured credential value.
 
 ## Implementation Notes
 

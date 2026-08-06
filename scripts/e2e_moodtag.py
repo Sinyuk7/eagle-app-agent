@@ -350,7 +350,7 @@ class E2E:
                 self.folder.id,
                 "--eagle-api",
                 "http://127.0.0.1:9",
-                "--mock-vl",
+                "--mock-model",
                 "--image-edge",
                 "128",
             ]
@@ -417,7 +417,9 @@ class E2E:
             assert_equal(result.returncode, 1, "empty result exit")
             assert_equal(len(stub.requests), 1, "empty result request count")
             assert_in(
-                "VL result missing required field: brief", result.stdout, "failure text"
+                "Model result missing required field: brief",
+                result.stdout,
+                "failure text",
             )
         current = self.eagle.item_info(item.id)
         assert_true(

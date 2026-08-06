@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 CONFIG_ENV = "MOODTAG_CONFIG"
-CONFIG_KEYS = ("base_url", "fallback_base_url", "model", "fallback_model", "eagle_api")
+CONFIG_KEYS = ("protocol", "base_url", "model", "eagle_api")
 
 
 class ConfigError(RuntimeError):
@@ -56,10 +56,10 @@ def save_user_config(config: dict[str, str], path: Path | None = None) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     # Keep config file self-documenting: every non-secret key exists, even unset.
     clean = {key: str(config.get(key, "") or "").strip() for key in CONFIG_KEYS}
-    path.write_text(
-        json.dumps(clean, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    rendered = json.dumps(clean, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(rendered, encoding="utf-8")
+    temporary.replace(path)
     return path
 
 
@@ -78,17 +78,12 @@ def public_config_view(
     config: dict[str, str],
     *,
     api_key_set: bool,
-    primary_api_key_set: bool = False,
-    fallback_api_key_set: bool = False,
 ) -> dict[str, Any]:
     return {
         "config_path": str(config_path()),
+        "protocol": config.get("protocol", ""),
         "base_url": config.get("base_url", ""),
-        "fallback_base_url": config.get("fallback_base_url", ""),
         "model": config.get("model", ""),
-        "fallback_model": config.get("fallback_model", ""),
         "eagle_api": config.get("eagle_api", ""),
         "api_key": "set" if api_key_set else "unset",
-        "primary_api_key": "set" if primary_api_key_set else "unset",
-        "fallback_api_key": "set" if fallback_api_key_set else "unset",
     }

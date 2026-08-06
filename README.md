@@ -21,15 +21,11 @@ MQBUH98ILYTQ0
 
 - 解析并显示目标 Eagle 文件夹
 - 显示 scope、item 数量、当前 model、覆盖风险
-- 首次缺少可用 API key 时，直接在 CLI 中进入 setup
-- 将 key 保存到 `~/.config/moodtag/.env`
+- 首次缺少完整模型配置时，直接在 CLI 中进入 setup
+- 将 endpoint 配置保存到 JSON，将 key 保存到 `~/.config/moodtag/.env`
 - 用 `y/N` 明确确认后，才开始真正写回 Eagle
 
-默认 model 已内置：
-
-```text
-qwen3.5-122b-a10b
-```
+模型 endpoint、protocol、model 和 API key 均需由用户配置；不会注入默认供应商或默认模型。
 
 必要支持面：
 
@@ -41,6 +37,9 @@ moodtag config
 
 `moodtag config` 会显示当前 effective defaults、`env_file` 路径，以及
 API key 是否已就绪。
+
+这是下一版本的全新配置格式。旧的 provider/fallback 字段不参与运行；删除旧配置后，
+使用 `moodtag config setup` 重新填写完整 endpoint。
 
 ## 2. 安装（Mac Apple Silicon）
 
@@ -81,8 +80,12 @@ API Key 不写入 `moodtag config` 的 JSON 文件。可使用环境变量、
 `~/.config/moodtag/.env`，或当前目录的 `.env`：
 
 ```sh
-export DASHSCOPE_API_KEY='你的 DashScope API Key'
-export MOODTAG_API_KEY='你的 n1n API Key'
+export MOODTAG_API_KEY='你的模型 API Key'
+
+moodtag config set --protocol responses \
+  --base-url https://your-model-service.example/v1 \
+  --model your-vision-model
+moodtag config auth
 
 moodtag config
 ```
@@ -161,9 +164,9 @@ moodtag tag --board 'MQBUH98ILYTQ0' --max-board-items 500 --write
 
 只处理当前文件夹、不包含子文件夹时加 `--no-recursive`。
 
-`moodtag tag` 每次都会在终端输出本次 provider plan、每张图片实际命中的 provider/model/host，并默认写入 JSONL 运行日志。日志默认位于 `~/.cache/moodtag/runs`，保留最近 50 个 `moodtag-*.jsonl` 文件。
+`moodtag tag` 会输出当前 protocol/model/host，并默认写入 JSONL 运行日志。日志默认位于 `~/.cache/moodtag/runs`，保留最近 50 个 `moodtag-*.jsonl` 文件；日志不记录 API key、请求 header、请求 body 或图片 data URL。
 
-开始并发前，`moodtag` 会先串行验证一张可处理图片。若 provider 返回 `401` 或 `403`，会立即停止本次运行，不会继续对后续图片发送请求；按提示更新对应的 `DASHSCOPE_API_KEY`、`MOODTAG_API_KEY` 或 `VL_API_KEY` 后再重试。视频等非图片素材会显示为 `skip`，不会记为失败。
+开始并发前，`moodtag` 会先串行验证一张可处理图片。若模型 endpoint 返回 `401` 或 `403`，会立即停止本次运行；按提示更新 `MOODTAG_API_KEY` 后再重试。网络错误、429 和 5xx 只重试同一个 endpoint，不会切换服务。视频等非图片素材会显示为 `skip`，不会记为失败。
 
 默认发送给模型的预览图长边是 `768px`。需要更高细节时可以传 `--image-edge 1024`。
 

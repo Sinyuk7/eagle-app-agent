@@ -16,7 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time  # noqa: F401 - public compatibility for tests and external patching
+import time  # noqa: F401 - tests patch module-level timing
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -38,12 +38,9 @@ from moodtag_core.annotation import (
     replace_analysis_annotation,
 )
 from moodtag_core.contract import (
-    DEFAULT_BASE_URL,
-    DEFAULT_FALLBACK_BASE_URL,
-    DEFAULT_FALLBACK_MODEL,
     DEFAULT_MAX_TOKENS,
-    DEFAULT_MODEL,
     DEFAULT_NO_RESPONSE_FORMAT,
+    DEFAULT_PROTOCOL,
     DEFAULT_TEMPERATURE,
     DEFAULT_TOP_P,
     MIN_MAX_TOKENS,
@@ -54,7 +51,7 @@ from moodtag_core.prompts import resolve_profile
 from moodtag_core.provider import (
     ProviderAuthenticationError,
     elapsed_ms_since,
-    is_n1n_base_url,
+    normalize_base_url,
 )
 from moodtag_core.provider import (
     VisionClient as CoreVisionClient,
@@ -167,16 +164,19 @@ class TagItemResult:
     item: EagleItem
     tags: list[str] = field(default_factory=list)
     annotation: str = ""
-    provider: dict[str, Any] = field(default_factory=dict)
-    provider_attempts: list[dict[str, Any]] = field(default_factory=list)
+    model_endpoint: dict[str, Any] = field(default_factory=dict)
+    attempts: list[dict[str, Any]] = field(default_factory=list)
     timings_ms: dict[str, int] = field(default_factory=dict)
     source_strategy: str = ""
     elapsed_ms: int = 0
     error: Exception | None = None
 
 
-def redact(text: str) -> str:
-    return re.sub(r"\bsk-[A-Za-z0-9_\-]{8,}\b", "sk-REDACTED", str(text))
+def redact(text: str, secret: str | None = None) -> str:
+    value = str(text)
+    if secret:
+        value = value.replace(secret, "REDACTED")
+    return re.sub(r"\bsk-[A-Za-z0-9_\-]{8,}\b", "sk-REDACTED", value)
 
 
 def log_root() -> Path:
@@ -242,38 +242,6 @@ def safe_mtime(path: Path) -> float:
 
 def url_join(base: str, path: str) -> str:
     return base.rstrip("/") + "/" + path.lstrip("/")
-
-
-def chat_completions_url(base_url: str) -> str:
-    base_url = base_url.strip().rstrip("/")
-    if not base_url:
-        raise MoodtagError("Missing --base-url value")
-    parts = urllib.parse.urlsplit(base_url)
-    path = parts.path.rstrip("/")
-    if path.endswith("/chat/completions"):
-        return base_url
-    if path.endswith("/v1"):
-        return url_join(base_url, "/chat/completions")
-    if path in {"", "/"}:
-        v1_base = urllib.parse.urlunsplit((parts.scheme, parts.netloc, "/v1", "", ""))
-        return url_join(v1_base, "/chat/completions")
-    return url_join(base_url, "/chat/completions")
-
-
-def models_url(base_url: str) -> str:
-    base_url = base_url.strip().rstrip("/")
-    if not base_url:
-        raise MoodtagError("Missing --base-url value")
-    parts = urllib.parse.urlsplit(base_url)
-    path = parts.path.rstrip("/")
-    if path.endswith("/models"):
-        return base_url
-    if path.endswith("/v1"):
-        return url_join(base_url, "/models")
-    if path in {"", "/"}:
-        v1_base = urllib.parse.urlunsplit((parts.scheme, parts.netloc, "/v1", "", ""))
-        return url_join(v1_base, "/models")
-    return url_join(base_url, "/models")
 
 
 def load_env_defaults() -> None:
@@ -363,7 +331,11 @@ def save_env_values(values: dict[str, str], path: Path | None = None) -> Path:
         rendered.append(f"{key}={quote_env_value(value)}")
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(rendered).rstrip() + "\n", encoding="utf-8")
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text("\n".join(rendered).rstrip() + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    temporary.replace(path)
+    os.chmod(path, 0o600)
     return path
 
 
@@ -427,16 +399,6 @@ def prompt_yes_no(prompt: str, *, default: bool = False) -> bool:
         if answer in {"n", "no"}:
             return False
         print("Please answer y or n.")
-
-
-def provider_key_env_name(base_url: str) -> str:
-    if is_n1n_base_url(base_url):
-        return "MOODTAG_API_KEY"
-    return "DASHSCOPE_API_KEY"
-
-
-def provider_label(base_url: str) -> str:
-    return "n1n" if is_n1n_base_url(base_url) else "DashScope"
 
 
 def public_attr(name: str) -> Any:
@@ -940,10 +902,11 @@ class MockVisionClient:
     def __init__(self, model: str = "mock-vision", profile: str = "default") -> None:
         self.model = model
         self.profile = resolve_profile(profile).id
-        self.last_provider_name = "mock"
-        self.last_provider_base_url = "mock://local"
-        self.last_provider_model = model
-        self.last_provider_attempts: list[Any] = []
+        self.protocol = "mock"
+        self.last_endpoint_protocol = "mock"
+        self.last_endpoint_base_url = "mock://local"
+        self.last_endpoint_model = model
+        self.last_attempts: list[Any] = []
 
     def analyze(
         self,
@@ -968,12 +931,12 @@ class MockVisionClient:
             taxonomy=taxonomy,
             max_tags=max_tags,
         )
-        self.last_provider_name = "mock"
-        self.last_provider_base_url = "mock://local"
-        self.last_provider_model = self.model
-        self.last_provider_attempts = [
+        self.last_endpoint_protocol = "mock"
+        self.last_endpoint_base_url = "mock://local"
+        self.last_endpoint_model = self.model
+        self.last_attempts = [
             {
-                "name": "mock",
+                "protocol": "mock",
                 "base_url": "mock://local",
                 "model": self.model,
                 "ok": True,
@@ -1002,7 +965,7 @@ def extract_chat_content_json(data: Any) -> dict[str, Any]:
     return parse_json_content(extract_assistant_content(data))
 
 
-def normalize_vl_result(
+def normalize_model_result(
     data: Any,
     taxonomy: dict[str, list[str]] | None = None,
     max_tags: int = DEFAULT_MAX_TAGS,
@@ -1015,14 +978,14 @@ def normalize_vl_result(
                 taxonomy=taxonomy,
                 max_tags=max_tags,
             )
-        if isinstance(data, dict) and "choices" in data:
+        if isinstance(data, dict) and ("choices" in data or "output" in data):
             return parse_analysis_response(data, taxonomy=taxonomy, max_tags=max_tags)
         return normalize_analysis_json(data, taxonomy=taxonomy, max_tags=max_tags)
     except CoreError as exc:
         raise MoodtagError(str(exc)) from exc
 
 
-def validate_vl_result(result: MoodtagAnalysis) -> None:
+def validate_model_result(result: MoodtagAnalysis) -> None:
     if not all(
         [
             result.brief,
@@ -1033,7 +996,7 @@ def validate_vl_result(result: MoodtagAnalysis) -> None:
             result.light_color,
         ]
     ):
-        raise MoodtagError("VL result missing required annotation fields")
+        raise MoodtagError("Model result missing required annotation fields")
 
 
 def normalize_list(value: Any) -> list[str]:
@@ -1056,25 +1019,40 @@ def build_notes_block(result: MoodtagAnalysis) -> str:
 
 
 def make_vision_client(args: argparse.Namespace) -> VisionClient | MockVisionClient:
-    if getattr(args, "mock_vl", False):
+    if getattr(args, "mock_model", False):
         return MockVisionClient(args.model or "mock-vision", profile=args.profile)
-    model = args.model or os.environ.get("MOODTAG_MODEL", "") or DEFAULT_MODEL
-    if not model:
-        raise MoodtagError("Missing model. Pass --model or set MOODTAG_MODEL.")
-    api_key = provider_api_key_for_base_url(args.base_url)
-    fallback_api_key = provider_api_key_for_base_url(args.fallback_base_url)
-    if not api_key and not fallback_api_key:
+    protocol = str(
+        getattr(args, "protocol", "") or os.environ.get("MOODTAG_PROTOCOL", "")
+    ).strip()
+    model = str(
+        getattr(args, "model", "") or os.environ.get("MOODTAG_MODEL", "")
+    ).strip()
+    base_url = str(
+        getattr(args, "base_url", "") or os.environ.get("MOODTAG_BASE_URL", "")
+    ).strip()
+    api_key = os.environ.get("MOODTAG_API_KEY", "").strip()
+    missing = [
+        name
+        for name, value in (
+            ("protocol", protocol),
+            ("base URL", base_url),
+            ("model", model),
+        )
+        if not value
+    ]
+    if missing or not api_key:
+        details = ", ".join(missing)
+        if not api_key:
+            details = f"{details}; MOODTAG_API_KEY" if details else "MOODTAG_API_KEY"
         raise MoodtagError(
-            "No vision API key configured. Set MOODTAG_API_KEY for n1n, "
-            "or DASHSCOPE_API_KEY for DashScope."
+            f"Model setup incomplete ({details}). Run `moodtag config setup`; "
+            "set MOODTAG_API_KEY or run `moodtag config auth`."
         )
     return VisionClient(
-        base_url=args.base_url,
-        fallback_base_url=args.fallback_base_url,
+        protocol=protocol,
+        base_url=base_url,
         model=model,
-        fallback_model=args.fallback_model,
         api_key=api_key,
-        fallback_api_key=fallback_api_key,
         response_format=not args.no_response_format,
         temperature=args.temperature,
         top_p=args.top_p,
@@ -1083,30 +1061,33 @@ def make_vision_client(args: argparse.Namespace) -> VisionClient | MockVisionCli
     )
 
 
-def ensure_guided_api_key(args: argparse.Namespace) -> None:
-    if provider_api_key_for_base_url(args.base_url) or provider_api_key_for_base_url(
-        args.fallback_base_url
-    ):
+def ensure_model_setup(args: argparse.Namespace) -> None:
+    complete = bool(
+        getattr(args, "protocol", "")
+        and getattr(args, "base_url", "")
+        and getattr(args, "model", "")
+        and os.environ.get("MOODTAG_API_KEY", "").strip()
+    )
+    if complete:
+        normalize_base_url(args.base_url, args.protocol)
         return
     if not sys.stdin.isatty():
         raise MoodtagError(
-            "No vision API key configured. Run `moodtag config` or open an interactive terminal."
+            "Model setup incomplete. Run `moodtag config setup` and set MOODTAG_API_KEY."
         )
-    env_name = provider_key_env_name(args.base_url)
-    label = provider_label(args.base_url)
-    print(f"No {label} API key found.")
-    api_key = getpass.getpass(f"Paste {label} API key: ").strip()
-    if not api_key:
-        raise MoodtagError("API key setup cancelled.")
-    path = save_env_values({env_name: api_key})
-    os.environ[env_name] = api_key
-    print(f"Saved {env_name} to {path}")
-
-
-def provider_api_key_for_base_url(base_url: str) -> str | None:
-    if is_n1n_base_url(base_url):
-        return os.environ.get("MOODTAG_API_KEY") or os.environ.get("VL_API_KEY")
-    return os.environ.get("DASHSCOPE_API_KEY")
+    values = _setup_prompt()
+    print(f"Protocol: {values['protocol']}")
+    print(f"Base URL: {values['base_url']}")
+    print(f"Model: {values['model']}")
+    print("API key: set")
+    if not prompt_yes_no("Save this model configuration?", default=False):
+        raise MoodtagError("Setup cancelled.")
+    _persist_setup(values)
+    args.protocol = values["protocol"]
+    args.base_url = values["base_url"]
+    args.model = values["model"]
+    if "MOODTAG_API_KEY" not in os.environ:
+        os.environ["MOODTAG_API_KEY"] = values["api_key"]
 
 
 def validate_board_scope_args(args: argparse.Namespace) -> None:
@@ -1151,7 +1132,7 @@ def analyze_tag_item(
     max_tags: int,
 ) -> TagItemResult:
     item_started = time.monotonic()
-    clear_provider_trace(vision)
+    clear_endpoint_trace(vision)
     source_lookup_ms = 0
     preview_ms = 0
     vision_ms = 0
@@ -1192,7 +1173,7 @@ def analyze_tag_item(
             )
             vision_ms = elapsed_ms_since(vision_started)
             vision_finished = True
-        validate_vl_result(result)
+        validate_model_result(result)
         tags, _rejected = reconcile_tags(result, taxonomy, max_tags=max_tags)
         analysis_total_ms = elapsed_ms_since(item_started)
         return TagItemResult(
@@ -1200,8 +1181,8 @@ def analyze_tag_item(
             item=item,
             tags=tags,
             annotation=build_notes_block(result),
-            provider=provider_record(vision),
-            provider_attempts=provider_attempt_records(vision),
+            model_endpoint=model_endpoint_record(vision),
+            attempts=model_attempt_records(vision),
             timings_ms={
                 "source_lookup_ms": source_lookup_ms,
                 "preview_ms": preview_ms,
@@ -1222,8 +1203,8 @@ def analyze_tag_item(
         return TagItemResult(
             index=index,
             item=item,
-            provider=provider_record(vision),
-            provider_attempts=provider_attempt_records(vision),
+            model_endpoint=model_endpoint_record(vision),
+            attempts=model_attempt_records(vision),
             timings_ms={
                 "source_lookup_ms": source_lookup_ms,
                 "preview_ms": preview_ms,
@@ -1554,102 +1535,70 @@ def command_export_context(args: argparse.Namespace) -> int:
     return 0
 
 
-def format_provider_plan(vision: Any) -> str:
-    records = provider_plan_records(vision)
-    if not records:
+def format_model_endpoint(vision: Any) -> str:
+    record = model_endpoint_record(vision)
+    if not record:
         return "unavailable"
-    return " -> ".join(
-        (
-            f"{record['name']}{provider_plan_status(record)}"
-            f"({record['model']} @ {provider_display_host(record['base_url'])}, "
-            f"key={record['api_key']})"
-        )
-        for record in records
+    return (
+        f"protocol={record.get('protocol', '')} model={record.get('model', '')} "
+        f"host={endpoint_display_host(record.get('base_url', ''))}"
     )
 
 
-def provider_display_host(base_url: str) -> str:
+def endpoint_display_host(base_url: str) -> str:
     parts = urllib.parse.urlsplit(str(base_url or ""))
     if parts.netloc:
         return parts.netloc
     return str(base_url or "")
 
 
-def provider_plan_status(record: dict[str, Any]) -> str:
-    if record.get("active", True):
-        return ""
-    reason = record.get("skip_reason") or "inactive"
-    return f"[skip:{reason}]"
-
-
-def provider_plan_records(vision: Any) -> list[dict[str, Any]]:
-    endpoints = getattr(vision, "endpoints", None)
-    if callable(endpoints):
-        active_keys = {
-            (endpoint.name, endpoint.base_url, endpoint.model)
-            for endpoint in endpoints(include_cooldown=True)
-        }
-        return [
-            {
-                "name": endpoint.name,
-                "base_url": endpoint.base_url,
-                "model": endpoint.model,
-                "api_key": "set" if endpoint.api_key else "unset",
-                "active": (endpoint.name, endpoint.base_url, endpoint.model)
-                in active_keys,
-                "skip_reason": "cooldown"
-                if (endpoint.name, endpoint.base_url, endpoint.model) not in active_keys
-                else "",
-            }
-            for endpoint in endpoints(include_cooldown=False)
-        ]
-    name = str(getattr(vision, "last_provider_name", "") or "mock")
-    base_url = str(getattr(vision, "last_provider_base_url", "") or "mock://local")
-    model = str(
-        getattr(vision, "last_provider_model", "") or getattr(vision, "model", "")
-    )
+def model_endpoint_records(vision: Any) -> list[dict[str, Any]]:
+    record = model_endpoint_record(vision)
+    if not record:
+        return []
     return [
         {
-            "name": name,
-            "base_url": base_url,
-            "model": model,
-            "api_key": "set",
-            "active": True,
-            "skip_reason": "",
+            "protocol": record["protocol"],
+            "base_url": record["base_url"],
+            "model": record["model"],
         }
     ]
 
 
-def provider_summary(vision: Any) -> str:
-    record = provider_record(vision)
-    return provider_record_summary(record)
+def model_endpoint_summary(vision: Any) -> str:
+    record = model_endpoint_record(vision)
+    return model_endpoint_record_summary(record)
 
 
-def provider_record_summary(record: dict[str, Any]) -> str:
+def model_endpoint_record_summary(record: dict[str, Any]) -> str:
     if not record:
-        return "provider=unknown"
+        return "model=unknown"
     return (
-        f"provider={record['name']} model={record['model']} "
-        f"host={provider_display_host(record['base_url'])}"
+        f"protocol={record['protocol']} model={record['model']} "
+        f"host={endpoint_display_host(record['base_url'])}"
     )
 
 
-def provider_record(vision: Any) -> dict[str, Any]:
-    name = str(getattr(vision, "last_provider_name", "") or "")
-    base_url = str(getattr(vision, "last_provider_base_url", "") or "")
-    model = str(getattr(vision, "last_provider_model", "") or "")
-    if not name and not base_url and not model:
+def model_endpoint_record(vision: Any) -> dict[str, Any]:
+    protocol = str(
+        getattr(vision, "last_endpoint_protocol", "")
+        or getattr(vision, "protocol", "")
+        or ""
+    )
+    base_url = str(getattr(vision, "last_endpoint_base_url", "") or "")
+    model = str(getattr(vision, "last_endpoint_model", "") or "")
+    if not protocol and not base_url and not model:
         return {}
-    return {"name": name, "base_url": base_url, "model": model}
+    return {"protocol": protocol, "base_url": base_url, "model": model}
 
 
-def provider_attempt_records(vision: Any) -> list[dict[str, Any]]:
+def model_attempt_records(vision: Any) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    for attempt in getattr(vision, "last_provider_attempts", []) or []:
+    for attempt in getattr(vision, "last_attempts", []) or []:
         if isinstance(attempt, dict):
             records.append(
                 {
-                    "name": attempt.get("name", ""),
+                    "protocol": attempt.get("protocol", ""),
                     "base_url": attempt.get("base_url", ""),
                     "model": attempt.get("model", ""),
                     "ok": bool(attempt.get("ok")),
@@ -1661,7 +1610,7 @@ def provider_attempt_records(vision: Any) -> list[dict[str, Any]]:
             continue
         records.append(
             {
-                "name": getattr(attempt, "name", ""),
+                "protocol": getattr(attempt, "protocol", ""),
                 "base_url": getattr(attempt, "base_url", ""),
                 "model": getattr(attempt, "model", ""),
                 "ok": bool(getattr(attempt, "ok", False)),
@@ -1673,12 +1622,12 @@ def provider_attempt_records(vision: Any) -> list[dict[str, Any]]:
     return records
 
 
-def clear_provider_trace(vision: Any) -> None:
+def clear_endpoint_trace(vision: Any) -> None:
     for name, value in (
-        ("last_provider_name", ""),
-        ("last_provider_base_url", ""),
-        ("last_provider_model", ""),
-        ("last_provider_attempts", []),
+        ("last_endpoint_protocol", ""),
+        ("last_endpoint_base_url", ""),
+        ("last_endpoint_model", ""),
+        ("last_attempts", []),
     ):
         with contextlib.suppress(Exception):
             setattr(vision, name, value)
@@ -1742,6 +1691,8 @@ def record_timing_totals(
 
 def command_guided_tag(args: argparse.Namespace) -> int:
     validate_tag_args(args)
+    if not getattr(args, "mock_model", False):
+        ensure_model_setup(args)
     eagle = public_attr("EagleClient")(args.eagle_api)
     eagle.app_info()
     scope = load_board_scope(
@@ -1761,9 +1712,6 @@ def command_guided_tag(args: argparse.Namespace) -> int:
             else:
                 pending.append(item)
         items = pending[: args.limit] + processed
-    if not getattr(args, "mock_vl", False):
-        ensure_guided_api_key(args)
-
     if not sys.stdin.isatty():
         raise MoodtagError(
             "Guided main flow requires an interactive terminal. Use `moodtag tag --board ...` for non-interactive runs."
@@ -1771,9 +1719,7 @@ def command_guided_tag(args: argparse.Namespace) -> int:
     print(f"Board: {board.path} ({board.id})")
     print_scope_summary(scope)
     print(f"Items: {len(items)}")
-    print(
-        f"Model: {args.model or os.environ.get('MOODTAG_MODEL', '') or DEFAULT_MODEL}"
-    )
+    print(f"Protocol: {args.protocol}; Model: {args.model}")
     print("API key: ready")
     print("Overwrite risk: existing tags and annotation will be replaced.")
 
@@ -1786,7 +1732,7 @@ def command_guided_tag(args: argparse.Namespace) -> int:
     image_root = eagle_library_images_root(eagle)
     run_log = make_tag_run_log()
     print(f"Log: {run_log.path}")
-    print(f"Provider plan: {format_provider_plan(vision)}")
+    print(f"Model endpoint: {format_model_endpoint(vision)}")
     run_log.write(
         "run_start",
         command="tag",
@@ -1801,7 +1747,7 @@ def command_guided_tag(args: argparse.Namespace) -> int:
         concurrency=args.concurrency,
         max_tags=args.max_tags,
         retries=args.retries,
-        provider_plan=provider_plan_records(vision),
+        model_endpoint=model_endpoint_records(vision),
     )
     run_log.write(
         "board_loaded",
@@ -1864,7 +1810,7 @@ def command_guided_tag(args: argparse.Namespace) -> int:
                 probe_result.item, index=probe_result.index, total=total
             ),
             error=redact(str(probe_result.error)),
-            provider_attempts=probe_result.provider_attempts,
+            attempts=probe_result.attempts,
             timings_ms=merge_timings(probe_result.timings_ms),
             source_strategy=probe_result.source_strategy,
             elapsed_ms=probe_result.elapsed_ms,
@@ -1875,7 +1821,7 @@ def command_guided_tag(args: argparse.Namespace) -> int:
         run_log.write(
             "run_aborted",
             reason=redact(str(probe_result.error)),
-            provider_attempts=probe_result.provider_attempts,
+            attempts=probe_result.attempts,
         )
         print(f"Board: {board.path} ({board.id})")
         print_scope_summary(scope)
@@ -1922,7 +1868,7 @@ def command_guided_tag(args: argparse.Namespace) -> int:
                 "item_failed",
                 item=item_log_record(result.item, index=result.index, total=total),
                 error=redact(str(result.error)),
-                provider_attempts=result.provider_attempts,
+                attempts=result.attempts,
                 timings_ms=merge_timings(result.timings_ms),
                 source_strategy=result.source_strategy,
                 elapsed_ms=result.elapsed_ms,
@@ -1949,8 +1895,8 @@ def command_guided_tag(args: argparse.Namespace) -> int:
                 "item_failed",
                 item=item_log_record(result.item, index=result.index, total=total),
                 error=redact(str(exc)),
-                provider=result.provider,
-                provider_attempts=result.provider_attempts,
+                model_endpoint=result.model_endpoint,
+                attempts=result.attempts,
                 timings_ms=timings_ms,
                 source_strategy=result.source_strategy,
                 elapsed_ms=result.elapsed_ms,
@@ -1965,10 +1911,10 @@ def command_guided_tag(args: argparse.Namespace) -> int:
             result.timings_ms, write_ms=elapsed_ms_since(write_started)
         )
         record_timing_totals(timing_totals_ms, timing_item_counts, timings_ms)
-        provider = provider_record_summary(result.provider)
+        endpoint = model_endpoint_record_summary(result.model_endpoint)
         print(
             f"[{result.index}/{total}] {action}\t{result.item.id}\t"
-            f"{result.item.name}\t{len(result.tags)} tags\t{provider}"
+            f"{result.item.name}\t{len(result.tags)} tags\t{endpoint}"
         )
         run_log.write(
             "item_written",
@@ -1983,8 +1929,8 @@ def command_guided_tag(args: argparse.Namespace) -> int:
             changed=True,
             tags=result.tags,
             tag_count=len(result.tags),
-            provider=result.provider,
-            provider_attempts=result.provider_attempts,
+            model_endpoint=result.model_endpoint,
+            attempts=result.attempts,
             timings_ms=timings_ms,
             source_strategy=result.source_strategy,
             elapsed_ms=result.elapsed_ms,
@@ -2050,7 +1996,7 @@ def command_tag(args: argparse.Namespace) -> int:
     image_root = eagle_library_images_root(eagle)
     run_log = make_tag_run_log()
     print(f"Log: {run_log.path}")
-    print(f"Provider plan: {format_provider_plan(vision)}")
+    print(f"Model endpoint: {format_model_endpoint(vision)}")
     run_log.write(
         "run_start",
         command="tag",
@@ -2065,7 +2011,7 @@ def command_tag(args: argparse.Namespace) -> int:
         concurrency=args.concurrency,
         max_tags=args.max_tags,
         retries=args.retries,
-        provider_plan=provider_plan_records(vision),
+        model_endpoint=model_endpoint_records(vision),
     )
     if args.limit:
         pending: list[EagleItem] = []
@@ -2110,7 +2056,7 @@ def command_tag(args: argparse.Namespace) -> int:
                 "item_failed",
                 item=item_log_record(result.item, index=result.index, total=total),
                 error=redact(str(result.error)),
-                provider_attempts=result.provider_attempts,
+                attempts=result.attempts,
                 timings_ms=timings_ms,
                 source_strategy=result.source_strategy,
                 elapsed_ms=result.elapsed_ms,
@@ -2142,8 +2088,8 @@ def command_tag(args: argparse.Namespace) -> int:
                     "item_failed",
                     item=item_log_record(result.item, index=result.index, total=total),
                     error=redact(str(exc)),
-                    provider=result.provider,
-                    provider_attempts=result.provider_attempts,
+                    model_endpoint=result.model_endpoint,
+                    attempts=result.attempts,
                     timings_ms=timings_ms,
                     source_strategy=result.source_strategy,
                     elapsed_ms=result.elapsed_ms,
@@ -2165,10 +2111,10 @@ def command_tag(args: argparse.Namespace) -> int:
             timings_ms = merge_timings(result.timings_ms)
             record_timing_totals(timing_totals_ms, timing_item_counts, timings_ms)
 
-        provider = provider_record_summary(result.provider)
+        endpoint = model_endpoint_record_summary(result.model_endpoint)
         print(
             f"[{result.index}/{total}] {action}\t{result.item.id}\t"
-            f"{result.item.name}\t{len(result.tags)} tags\t{provider}"
+            f"{result.item.name}\t{len(result.tags)} tags\t{endpoint}"
         )
         run_log.write(
             "item_completed",
@@ -2177,8 +2123,8 @@ def command_tag(args: argparse.Namespace) -> int:
             changed=True,
             tags=result.tags,
             tag_count=len(result.tags),
-            provider=result.provider,
-            provider_attempts=result.provider_attempts,
+            model_endpoint=result.model_endpoint,
+            attempts=result.attempts,
             timings_ms=timings_ms,
             source_strategy=result.source_strategy,
             elapsed_ms=result.elapsed_ms,
@@ -2254,7 +2200,7 @@ def command_tag(args: argparse.Namespace) -> int:
                 run_log.write(
                     "run_aborted",
                     reason=redact(str(probe_result.error)),
-                    provider_attempts=probe_result.provider_attempts,
+                    attempts=probe_result.attempts,
                 )
                 return finish_run(aborted=True)
 
@@ -2292,7 +2238,7 @@ def command_tag(args: argparse.Namespace) -> int:
             run_log.write(
                 "run_aborted",
                 reason=redact(str(result.error)),
-                provider_attempts=result.provider_attempts,
+                attempts=result.attempts,
             )
             return finish_run(aborted=True)
 
@@ -2390,11 +2336,26 @@ def command_reset(args: argparse.Namespace) -> int:
 
 
 def command_config_set(args: argparse.Namespace) -> int:
+    current = effective_model_config(load_user_config())
+    supplied = {
+        key: value
+        for key, value in {
+            "protocol": args.protocol,
+            "base_url": args.base_url,
+            "model": args.model,
+        }.items()
+        if value
+    }
+    merged = {**current, **supplied}
+    if args.protocol and args.protocol not in {"chat", "responses"}:
+        raise MoodtagError("--protocol must be chat or responses")
+    protocol = merged["protocol"] or DEFAULT_PROTOCOL
+    if merged["base_url"]:
+        normalized = normalize_base_url(merged["base_url"], protocol)
+        if args.base_url:
+            supplied["base_url"] = normalized
     values = {
-        "base_url": args.base_url,
-        "fallback_base_url": args.fallback_base_url,
-        "model": args.model,
-        "fallback_model": args.fallback_model,
+        **supplied,
         "eagle_api": args.eagle_api,
     }
     values = {key: value for key, value in values.items() if value}
@@ -2405,45 +2366,121 @@ def command_config_set(args: argparse.Namespace) -> int:
     return 0
 
 
+def effective_model_config(config: dict[str, str]) -> dict[str, str]:
+    return {
+        "protocol": config_value(config, "MOODTAG_PROTOCOL", "protocol", ""),
+        "base_url": config_value(config, "MOODTAG_BASE_URL", "base_url", ""),
+        "model": config_value(config, "MOODTAG_MODEL", "model", ""),
+    }
+
+
+def _setup_prompt() -> dict[str, str]:
+    try:
+        protocol = input("Protocol [responses]: ").strip().lower() or DEFAULT_PROTOCOL
+        base_url = input("Base URL: ").strip()
+        model = input("Model: ").strip()
+    except (EOFError, KeyboardInterrupt) as exc:
+        raise MoodtagError("Setup cancelled.") from exc
+    if not base_url or not model:
+        raise MoodtagError("Setup cancelled.")
+    base_url = normalize_base_url(base_url, protocol)
+    try:
+        api_key = getpass.getpass("API key: ").strip()
+    except (EOFError, KeyboardInterrupt) as exc:
+        raise MoodtagError("Setup cancelled.") from exc
+    if not api_key:
+        raise MoodtagError("Setup cancelled.")
+    return {
+        "protocol": protocol,
+        "base_url": base_url,
+        "model": model,
+        "api_key": api_key,
+    }
+
+
+def _persist_setup(values: dict[str, str]) -> None:
+    config_file = config_path()
+    env_file = env_file_path()
+    old_config = config_file.read_bytes() if config_file.exists() else None
+    old_env = env_file.read_bytes() if env_file.exists() else None
+    try:
+        config = load_user_config(config_file)
+        config.update({key: values[key] for key in ("protocol", "base_url", "model")})
+        save_user_config(config, config_file)
+        save_env_values({"MOODTAG_API_KEY": values["api_key"]}, env_file)
+    except Exception:
+        if old_config is None:
+            with contextlib.suppress(FileNotFoundError):
+                config_file.unlink()
+        else:
+            config_file.write_bytes(old_config)
+        if old_env is None:
+            with contextlib.suppress(FileNotFoundError):
+                env_file.unlink()
+        else:
+            env_file.write_bytes(old_env)
+        raise
+
+
+def command_config_setup(args: argparse.Namespace) -> int:
+    del args
+    if not sys.stdin.isatty():
+        raise MoodtagError(
+            "Interactive setup requires a TTY. Run `moodtag config set` and set MOODTAG_API_KEY."
+        )
+    values = _setup_prompt()
+    print(f"Protocol: {values['protocol']}")
+    print(f"Base URL: {values['base_url']}")
+    print(f"Model: {values['model']}")
+    print("API key: set")
+    if not prompt_yes_no("Save this model configuration?", default=False):
+        print("Cancelled. No changes written.")
+        return 0
+    _persist_setup(values)
+    print(f"Wrote {config_path()}")
+    print(f"Wrote {env_file_path()}")
+    return 0
+
+
+def command_config_auth(args: argparse.Namespace) -> int:
+    del args
+    if not sys.stdin.isatty():
+        raise MoodtagError(
+            "Interactive auth requires a TTY. Set MOODTAG_API_KEY in the environment."
+        )
+    try:
+        api_key = getpass.getpass("API key: ").strip()
+    except (EOFError, KeyboardInterrupt) as exc:
+        raise MoodtagError("Setup cancelled.") from exc
+    if not api_key:
+        raise MoodtagError("Setup cancelled.")
+    if not prompt_yes_no("Save this API key?", default=False):
+        print("Cancelled. No changes written.")
+        return 0
+    save_env_values({"MOODTAG_API_KEY": api_key})
+    print(f"Wrote {env_file_path()}")
+    return 0
+
+
 def command_config_show(args: argparse.Namespace) -> int:
     config_file = config_path()
     if not config_file.exists() or config_file.stat().st_size == 0:
         save_user_config({}, config_file)
     config = load_user_config()
     save_user_config(config, config_file)
-    primary_base_url = config_value(
-        config, "MOODTAG_BASE_URL", "base_url", DEFAULT_BASE_URL
-    )
-    fallback_base_url = config_value(
-        config,
-        "MOODTAG_FALLBACK_BASE_URL",
-        "fallback_base_url",
-        DEFAULT_FALLBACK_BASE_URL,
-    )
-    model = config_value(config, "MOODTAG_MODEL", "model", DEFAULT_MODEL)
-    fallback_model = config_value(
-        config,
-        "MOODTAG_FALLBACK_MODEL",
-        "fallback_model",
-        DEFAULT_FALLBACK_MODEL,
-    )
+    model_config = effective_model_config(config)
     eagle_api = config_value(
         config, "MOODTAG_EAGLE_API", "eagle_api", DEFAULT_EAGLE_API
     )
-    primary_api_key_set = bool(provider_api_key_for_base_url(primary_base_url))
-    fallback_api_key_set = bool(provider_api_key_for_base_url(fallback_base_url))
     view = public_config_view(
         config,
-        api_key_set=primary_api_key_set or fallback_api_key_set,
-        primary_api_key_set=primary_api_key_set,
-        fallback_api_key_set=fallback_api_key_set,
+        api_key_set=bool(os.environ.get("MOODTAG_API_KEY", "").strip()),
     )
     view = {
         **view,
-        "base_url": primary_base_url,
-        "fallback_base_url": fallback_base_url,
-        "model": model,
-        "fallback_model": fallback_model,
+        "protocol": model_config["protocol"],
+        "base_url": model_config["base_url"],
+        "model": model_config["model"],
         "eagle_api": eagle_api,
         "env_file": str(env_file_path()),
     }
@@ -2452,14 +2489,11 @@ def command_config_show(args: argparse.Namespace) -> int:
         return 0
     print(f"Config: {view['config_path']}")
     print(f"env_file: {view['env_file']}")
+    print(f"protocol: {view['protocol'] or '-'}")
     print(f"base_url: {view['base_url'] or '-'}")
-    print(f"fallback_base_url: {view['fallback_base_url'] or '-'}")
     print(f"model: {view['model'] or '-'}")
-    print(f"fallback_model: {view['fallback_model'] or '-'}")
     print(f"eagle_api: {view['eagle_api'] or '-'}")
     print(f"api_key: {view['api_key']}")
-    print(f"primary_api_key: {view['primary_api_key']}")
-    print(f"fallback_api_key: {view['fallback_api_key']}")
     return 0
 
 
@@ -2529,34 +2563,13 @@ def build_parser() -> argparse.ArgumentParser:
         default="default",
         help="Prompt profile to use (default: default)",
     )
-    tag.add_argument("--mock-vl", action="store_true", help="Use deterministic mock VL")
     tag.add_argument(
-        "--base-url",
-        default=config_value(
-            user_config, "MOODTAG_BASE_URL", "base_url", DEFAULT_BASE_URL
-        ),
+        "--mock-model", action="store_true", help="Use deterministic mock model"
     )
-    tag.add_argument(
-        "--fallback-base-url",
-        default=config_value(
-            user_config,
-            "MOODTAG_FALLBACK_BASE_URL",
-            "fallback_base_url",
-            DEFAULT_FALLBACK_BASE_URL,
-        ),
-    )
-    tag.add_argument(
-        "--model",
-        default=config_value(user_config, "MOODTAG_MODEL", "model", DEFAULT_MODEL),
-    )
-    tag.add_argument(
-        "--fallback-model",
-        default=config_value(
-            user_config,
-            "MOODTAG_FALLBACK_MODEL",
-            "fallback_model",
-            DEFAULT_FALLBACK_MODEL,
-        ),
+    tag.set_defaults(
+        protocol=config_value(user_config, "MOODTAG_PROTOCOL", "protocol", ""),
+        base_url=config_value(user_config, "MOODTAG_BASE_URL", "base_url", ""),
+        model=config_value(user_config, "MOODTAG_MODEL", "model", ""),
     )
     tag.add_argument(
         "--image-edge",
@@ -2645,12 +2658,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     config_sub = config.add_subparsers(dest="config_command", required=True)
     config_set = config_sub.add_parser("set", help="Set non-secret user defaults")
+    config_set.add_argument("--protocol", default="")
     config_set.add_argument("--base-url", default="")
-    config_set.add_argument("--fallback-base-url", default="")
     config_set.add_argument("--model", default="")
-    config_set.add_argument("--fallback-model", default="")
     config_set.add_argument("--eagle-api", default="")
     config_set.set_defaults(func=command_config_set)
+    config_setup = config_sub.add_parser(
+        "setup", help="Interactively configure one model endpoint"
+    )
+    config_setup.set_defaults(func=command_config_setup)
+    config_auth = config_sub.add_parser(
+        "auth", help="Interactively replace MOODTAG_API_KEY"
+    )
+    config_auth.set_defaults(func=command_config_auth)
     config_show = config_sub.add_parser("show", help="Show non-secret user defaults")
     config_show.add_argument("--json", action="store_true")
     config_show.set_defaults(func=command_config_show)
@@ -2672,6 +2692,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         load_env_defaults()
         argv = list(sys.argv[1:] if argv is None else argv)
+        for value in argv:
+            if value == "--api-key" or value.startswith("--api-key="):
+                raise MoodtagError(
+                    "API keys must be entered through interactive setup or MOODTAG_API_KEY."
+                )
         if argv and argv[0] == "help":
             build_parser().print_help()
             return 0

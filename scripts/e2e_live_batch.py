@@ -18,10 +18,10 @@ sys.path.insert(0, str(ROOT))
 
 import moodtag  # noqa: E402
 from moodtag_core.prompts import resolve_profile  # noqa: E402
+from moodtag_core.provider import models_url, protocol_url  # noqa: E402
 
 DEFAULT_BOARD = "明日方舟 - 小红书"
 DEFAULT_FIRST_LIMIT = 5
-DEFAULT_LIVE_MODEL = moodtag.DEFAULT_MODEL
 
 
 @dataclass
@@ -37,8 +37,8 @@ class RunResult:
     failed: int | None
 
 
-def redact(text: str) -> str:
-    return moodtag.redact(text)
+def redact(text: str, secret: str | None = None) -> str:
+    return moodtag.redact(text, secret)
 
 
 def parse_count(label: str, stdout: str) -> int | None:
@@ -62,8 +62,9 @@ def run_moodtag(args: list[str], env: dict[str, str], *, label: str) -> RunResul
         capture_output=True,
         check=False,
     )
-    stdout = redact(proc.stdout)
-    stderr = redact(proc.stderr)
+    secret = env.get("MOODTAG_API_KEY")
+    stdout = redact(proc.stdout, secret)
+    stderr = redact(proc.stderr, secret)
     return RunResult(
         label=label,
         args=args,
@@ -98,7 +99,7 @@ def board_state(client: moodtag.EagleClient, board: moodtag.Board) -> dict[str, 
 def find_models(base_url: str, api_key: str) -> list[str]:
     data = moodtag.http_request(
         "GET",
-        moodtag.models_url(base_url),
+        models_url(base_url),
         headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
         timeout=30,
     )
@@ -123,12 +124,10 @@ def preflight(
     client: moodtag.EagleClient,
     board: moodtag.Board,
     *,
+    protocol: str,
     base_url: str,
-    fallback_base_url: str,
     model: str,
-    fallback_model: str,
     api_key: str,
-    fallback_api_key: str | None,
     image_edge: int,
     no_response_format: bool,
     temperature: float,
@@ -148,12 +147,10 @@ def preflight(
     thumbnail = client.thumbnail_path(item.id)
     original = moodtag.locate_original_from_thumbnail(thumbnail, item)
     vision = moodtag.VisionClient(
+        protocol=protocol,
         base_url=base_url,
-        fallback_base_url=fallback_base_url,
         model=model,
-        fallback_model=fallback_model,
         api_key=api_key,
-        fallback_api_key=fallback_api_key,
         response_format=not no_response_format,
         temperature=temperature,
         top_p=top_p,
@@ -162,7 +159,7 @@ def preflight(
     )
     with moodtag.temporary_preview(original, image_edge=image_edge) as preview:
         result = vision.analyze(preview.path, taxonomy, retries=0, max_tags=15)
-    moodtag.validate_vl_result(result)
+    moodtag.validate_model_result(result)
     tags, rejected = moodtag.reconcile_tags(result, taxonomy, max_tags=15)
     return {
         "item_id": item.id,
@@ -226,24 +223,15 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get("MOODTAG_EAGLE_API", moodtag.DEFAULT_EAGLE_API),
     )
     parser.add_argument(
+        "--protocol",
+        default=os.environ.get("MOODTAG_PROTOCOL", "responses"),
+        choices=("chat", "responses"),
+    )
+    parser.add_argument(
         "--base-url",
-        default=os.environ.get("MOODTAG_BASE_URL", moodtag.DEFAULT_BASE_URL),
+        required=True,
     )
-    parser.add_argument(
-        "--fallback-base-url",
-        default=os.environ.get(
-            "MOODTAG_FALLBACK_BASE_URL", moodtag.DEFAULT_FALLBACK_BASE_URL
-        ),
-    )
-    parser.add_argument(
-        "--model", default=os.environ.get("MOODTAG_MODEL", DEFAULT_LIVE_MODEL)
-    )
-    parser.add_argument(
-        "--fallback-model",
-        default=os.environ.get(
-            "MOODTAG_FALLBACK_MODEL", moodtag.DEFAULT_FALLBACK_MODEL
-        ),
-    )
+    parser.add_argument("--model", default=os.environ.get("MOODTAG_MODEL", ""))
     parser.add_argument("--discover-models", action="store_true")
     parser.add_argument("--profile", default="default")
     parser.add_argument(
@@ -302,14 +290,12 @@ def main() -> int:
     moodtag.load_env_defaults()
     args = parse_args()
     args.profile = resolve_profile(args.profile).id
-    primary_api_key = os.environ.get("DASHSCOPE_API_KEY")
-    fallback_api_key = os.environ.get("MOODTAG_API_KEY") or os.environ.get("VL_API_KEY")
-    model_api_key = primary_api_key or fallback_api_key
-    model_base_url = args.base_url if primary_api_key else args.fallback_base_url
+    model_api_key = os.environ.get("MOODTAG_API_KEY")
+    model_base_url = args.base_url
     if not model_api_key:
-        raise SystemExit(
-            "DASHSCOPE_API_KEY, MOODTAG_API_KEY, or VL_API_KEY is required"
-        )
+        raise SystemExit("MOODTAG_API_KEY is required")
+    if not args.model:
+        raise SystemExit("MOODTAG_MODEL or --model is required")
 
     report_dir = Path(args.report_dir)
     client = moodtag.EagleClient(args.eagle_api)
@@ -319,9 +305,9 @@ def main() -> int:
         "passed": False,
         "board": {"id": board.id, "path": board.path},
         "base_url": args.base_url,
-        "fallback_base_url": args.fallback_base_url,
+        "endpoint_url": protocol_url(args.base_url, args.protocol),
+        "protocol": args.protocol,
         "model": args.model,
-        "fallback_model": args.fallback_model,
         "profile": args.profile,
         "models": [],
         "states": {"initial": initial},
@@ -350,10 +336,10 @@ def main() -> int:
     env.update(
         {
             "MOODTAG_EAGLE_API": args.eagle_api,
+            "MOODTAG_PROTOCOL": args.protocol,
             "MOODTAG_BASE_URL": args.base_url,
-            "MOODTAG_FALLBACK_BASE_URL": args.fallback_base_url,
+            "MOODTAG_API_KEY": model_api_key,
             "MOODTAG_MODEL": model,
-            "MOODTAG_FALLBACK_MODEL": args.fallback_model,
             "MOODTAG_IMAGE_EDGE": str(args.image_edge),
             "MOODTAG_TEMPERATURE": str(args.temperature),
             "MOODTAG_TOP_P": str(args.top_p),
@@ -385,12 +371,10 @@ def main() -> int:
         preflight_result = preflight(
             client,
             board,
+            protocol=args.protocol,
             base_url=args.base_url,
-            fallback_base_url=args.fallback_base_url,
             model=model,
-            fallback_model=args.fallback_model,
-            api_key=primary_api_key,
-            fallback_api_key=fallback_api_key,
+            api_key=model_api_key,
             image_edge=args.image_edge,
             no_response_format=args.no_response_format,
             temperature=args.temperature,
@@ -400,7 +384,7 @@ def main() -> int:
         )
     except Exception as exc:  # noqa: BLE001 - report live gateway failures
         payload["failure"] = "live preflight failed"
-        payload["preflight_error"] = redact(str(exc))
+        payload["preflight_error"] = redact(str(exc), model_api_key)
         payload["states"]["after_preflight_failure"] = board_state(client, board)
         return fail_with_report(payload, report_dir)
 
@@ -475,7 +459,8 @@ def main() -> int:
             "passed": True,
             "board": {"id": board.id, "path": board.path},
             "base_url": args.base_url,
-            "fallback_base_url": args.fallback_base_url,
+            "endpoint_url": protocol_url(args.base_url, args.protocol),
+            "protocol": args.protocol,
             "model": model,
             "profile": args.profile,
             "models": models,
@@ -503,5 +488,8 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except moodtag.MoodtagError as exc:
-        print(f"error: {redact(str(exc))}", file=sys.stderr)
+        print(
+            f"error: {redact(str(exc), os.environ.get('MOODTAG_API_KEY'))}",
+            file=sys.stderr,
+        )
         raise SystemExit(1) from exc

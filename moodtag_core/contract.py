@@ -4,12 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-DEFAULT_FALLBACK_BASE_URL = "https://api.n1n.ai/v1"
-DEFAULT_MODEL = "qwen3.5-122b-a10b"
-DEFAULT_FALLBACK_MODEL = "qwen3.5-122b-a10b"
-DEFAULT_PROVIDER_COOLDOWN_SECONDS = 1800
-
+SUPPORTED_PROTOCOLS = ("chat", "responses")
+DEFAULT_PROTOCOL = "responses"
 DEFAULT_TEMPERATURE = 0.6  ## 你的任务不是 OCR，也不是严格分类，而是“创作素材理解”。因此适度的创造性是有益的。0.6 是一个不错的起点，可以根据实际效果进行微调。
 QUALITY_TOP_P = 0.85
 DEFAULT_TOP_P = QUALITY_TOP_P
@@ -24,7 +20,7 @@ DEFAULT_REPETITION_PENALTY = 1.0
 
 # False means JSON Mode is enabled by default:
 # response_format={"type":"json_object"} is sent unless explicitly disabled.
-# Moodtag does not enable thinking mode for this provider contract.
+# Moodtag does not enable thinking mode for this model contract.
 DEFAULT_NO_RESPONSE_FORMAT = False
 
 
