@@ -293,6 +293,14 @@ class MoodtagTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("--image-edge", stderr.getvalue())
 
+    def test_main_reroutes_bare_board_argument_into_guided_flow(self):
+        with mock.patch("moodtag.cli.command_guided_tag", return_value=0) as guided:
+            code = moodtag.main(["MQ289V94I4U1A"])
+        self.assertEqual(code, 0)
+        guided.assert_called_once()
+        self.assertEqual(guided.call_args[0][0].board, "MQ289V94I4U1A")
+        self.assertTrue(guided.call_args[0][0].guided_main_flow)
+
     def test_invalid_concurrency_short_circuit_before_eagle(self):
         stderr = io.StringIO()
         with mock.patch.object(
@@ -339,6 +347,91 @@ class MoodtagTests(unittest.TestCase):
         self.assertIn("No vision API key configured.", stderr.getvalue())
         self.assertIn("MOODTAG_API_KEY", stderr.getvalue())
         self.assertIn("DASHSCOPE_API_KEY", stderr.getvalue())
+
+    def test_guided_flow_prompts_setup_and_saves_api_key(self):
+        fake, tmp = make_fake_eagle()
+        stdout = io.StringIO()
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MOODTAG_CONFIG": str(Path(tmp.name) / "config" / "config.json"),
+                "MOODTAG_BASE_URL": DEFAULT_BASE_URL,
+                "DASHSCOPE_API_KEY": "",
+                "MOODTAG_API_KEY": "",
+                "VL_API_KEY": "",
+            },
+            clear=False,
+        ):
+            with mock.patch.object(moodtag, "EagleClient", return_value=fake):
+                with mock.patch.object(
+                    moodtag.getpass,
+                    "getpass",
+                    return_value="sk-testGuidedKey1234567890",
+                ):
+                    with mock.patch.object(
+                        moodtag.sys.stdin, "isatty", return_value=True
+                    ):
+                        with mock.patch("builtins.input", return_value="n"):
+                            with mock.patch(
+                                "moodtag.cli.save_env_values",
+                                wraps=moodtag.save_env_values,
+                            ) as save_env:
+                                with redirect_stdout(stdout):
+                                    code = moodtag.main(["Board"])
+        tmp.cleanup()
+        self.assertEqual(code, 0)
+        save_env.assert_called_once()
+        self.assertIn("No DashScope API key found.", stdout.getvalue())
+        self.assertIn("Saved DASHSCOPE_API_KEY", stdout.getvalue())
+        self.assertIn("Cancelled. No changes written.", stdout.getvalue())
+
+    def test_guided_flow_aborts_when_confirmation_denied(self):
+        fake, tmp = make_fake_eagle()
+        stdout = io.StringIO()
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MOODTAG_BASE_URL": DEFAULT_BASE_URL,
+                "DASHSCOPE_API_KEY": "sk-testKeyForGuidedAbort123456",
+                "MOODTAG_API_KEY": "",
+                "VL_API_KEY": "",
+            },
+            clear=False,
+        ):
+            with mock.patch.object(moodtag, "EagleClient", return_value=fake):
+                with mock.patch.object(moodtag.sys.stdin, "isatty", return_value=True):
+                    with mock.patch("builtins.input", return_value="n"):
+                        with redirect_stdout(stdout):
+                            code = moodtag.main(["Board"])
+        tmp.cleanup()
+        self.assertEqual(code, 0)
+        self.assertEqual(fake.updated, [])
+        self.assertIn("Cancelled. No changes written.", stdout.getvalue())
+
+    def test_guided_flow_writes_after_confirmation(self):
+        fake, tmp = make_fake_eagle()
+        stdout = io.StringIO()
+        with mock.patch.object(moodtag, "EagleClient", return_value=fake):
+            with mock.patch.object(moodtag.sys.stdin, "isatty", return_value=True):
+                with mock.patch("builtins.input", return_value="y"):
+                    with redirect_stdout(stdout):
+                        code = moodtag.main(["Board", "--mock-vl", "--limit", "1"])
+        tmp.cleanup()
+        self.assertEqual(code, 0)
+        self.assertEqual(len(fake.updated), 1)
+        self.assertIn(f"Model: {DEFAULT_MODEL}", stdout.getvalue())
+        self.assertIn("Board: Board (B1)", stdout.getvalue())
+
+    def test_resolve_board_accepts_folder_url(self):
+        boards = [
+            moodtag.Board(id="MQ289V94I4U1A", name="美竹蘭", path="策划/美竹蘭"),
+        ]
+        resolved = moodtag.resolve_board(
+            "http://localhost:41595/folder?id=MQ289V94I4U1A",
+            boards,
+        )
+        self.assertEqual(resolved.id, "MQ289V94I4U1A")
+        self.assertEqual(resolved.path, "策划/美竹蘭")
 
     def test_validate_vl_result_rejects_empty_result(self):
         with self.assertRaisesRegex(moodtag.MoodtagError, "brief"):
@@ -1553,6 +1646,47 @@ class MoodtagTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("export-context", proc.stdout)
+
+    def test_help_mentions_primary_flow_first(self):
+        parser = moodtag.build_parser()
+        help_text = parser.format_help()
+        self.assertIn("moodtag <board-url-or-id>", help_text)
+        self.assertLess(
+            help_text.find("moodtag <board-url-or-id>"),
+            help_text.find("status"),
+        )
+        self.assertIn("moodtag config", help_text)
+
+    def test_help_alias_prints_help(self):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = moodtag.main(["help"])
+        self.assertEqual(code, 0)
+        self.assertIn("Primary flow:", buffer.getvalue())
+
+    def test_config_show_includes_default_model(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
+            with mock.patch.dict(
+                os.environ, {"MOODTAG_CONFIG": str(config_path)}, clear=False
+            ):
+                buffer = io.StringIO()
+                with redirect_stdout(buffer):
+                    code = moodtag.main(["config", "show"])
+        self.assertEqual(code, 0)
+        self.assertIn(f"model: {DEFAULT_MODEL}", buffer.getvalue())
+
+    def test_bare_config_shows_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
+            with mock.patch.dict(
+                os.environ, {"MOODTAG_CONFIG": str(config_path)}, clear=False
+            ):
+                buffer = io.StringIO()
+                with redirect_stdout(buffer):
+                    code = moodtag.main(["config"])
+        self.assertEqual(code, 0)
+        self.assertIn("Config:", buffer.getvalue())
 
     def test_vision_client_uses_fallback_base_url(self):
         requests = []

@@ -48,7 +48,10 @@ environment variables or a local ignored `.env` for API keys.
 
 ## Runtime Configuration
 
-Store non-secret defaults with `moodtag config`:
+End-user happy path is now `moodtag <board-url-or-id>`. Maintainers should keep
+that guided flow short: resolve board, show summary, confirm, then write.
+
+Store non-secret defaults with `moodtag config set`:
 
 ```sh
 moodtag config set --base-url https://dashscope.aliyuncs.com/compatible-mode/v1 \
@@ -64,22 +67,26 @@ export DASHSCOPE_API_KEY=...
 export MOODTAG_API_KEY=... # optional relay fallback
 ```
 
-`moodtag` loads `.env` from the current working directory without overriding
-variables that are already exported in the shell. Use `.env.example` as the
-template for local values.
+`moodtag` loads `~/.config/moodtag/.env` first, then the current working
+directory `.env`, without overriding variables that are already exported in the
+shell. Use `.env.example` as the template for local values.
 
 Show the effective saved defaults:
 
 ```sh
-moodtag config show
+moodtag config
 ```
 
 Configuration precedence is:
 
 1. CLI flags
-2. Environment variables and current-directory `.env`
+2. Environment variables, `~/.config/moodtag/.env`, and current-directory `.env`
 3. User config
 4. Built-in defaults
+
+`moodtag config` / `moodtag config show` prints the effective model, base URLs,
+`env_file` path, and API-key readiness without printing the secrets
+themselves.
 
 ## Settings
 
@@ -200,17 +207,32 @@ The release check:
 - validates the distributions with `twine check`
 - installs the built wheel in a temporary uv environment and verifies
   `moodtag --help`
+- on Apple Silicon macOS, builds `Moodtag-<version>-macos-arm64.pkg` and `.dmg`,
+  then starts the command from the package payload without a Python install
 
 Generated `build/`, `dist/`, and `*.egg-info/` outputs are ignored by git and
 must not be committed.
 
 ## Publishing
 
-The preferred user install path is PyPI:
+The release workflow publishes wheel + sdist and builds macOS installer artifacts
+on an Apple Silicon runner, then attaches the verified `.pkg` and `.dmg` to the
+matching GitHub Release:
 
 ```sh
 uv tool install eagle-app-agent
 ```
+
+`packaging/macos/build_installer.sh` freezes `moodtag` with PyInstaller, installs
+the binary at `/usr/local/libexec/moodtag/moodtag`, and exposes it through
+`/usr/local/bin/moodtag`. The workflow's installer smoke check installs the `.pkg`
+on a clean runner, then verifies `moodtag --help` using a `PATH` that has no
+developer-tool directory.
+
+The generated `.pkg` and `.dmg` are arm64 artifacts for M1-M5 Macs. An unsigned
+installer can still be opened after the user approves it in macOS Privacy &
+Security, but signing and notarization remove that extra Gatekeeper step. Treat
+them as release-quality improvements, not install prerequisites.
 
 Source installs are only for pre-release testing or development:
 

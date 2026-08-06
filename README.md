@@ -2,18 +2,67 @@
 
 `eagle-app-agent` 提供 `moodtag` CLI，用来读取 Eagle App 文件夹里的图片，并生成可写回 Eagle 的标签和备注。
 
-## 1. 安装
+## 1. 主路径
 
-发布到 PyPI 后，推荐这样安装：
+安装完成后，默认 happy path 是一条命令：
 
 ```sh
-uv tool install eagle-app-agent
+moodtag <board-url-or-id>
 ```
 
-确认安装成功：
+可接受两种输入：
+
+```text
+http://localhost:41595/folder?id=MQBUH98ILYTQ0
+MQBUH98ILYTQ0
+```
+
+执行时会按这个顺序走：
+
+- 解析并显示目标 Eagle 文件夹
+- 显示 scope、item 数量、当前 model、覆盖风险
+- 首次缺少可用 API key 时，直接在 CLI 中进入 setup
+- 将 key 保存到 `~/.config/moodtag/.env`
+- 用 `y/N` 明确确认后，才开始真正写回 Eagle
+
+默认 model 已内置：
+
+```text
+qwen3.5-122b-a10b
+```
+
+必要支持面：
+
+```sh
+moodtag help
+moodtag --help
+moodtag config
+```
+
+`moodtag config` 会显示当前 effective defaults、`env_file` 路径，以及
+API key 是否已就绪。
+
+## 2. 安装（Mac Apple Silicon）
+
+在 release 下载 `Moodtag-<version>-macos-arm64.dmg`。双击 DMG，再双击其中的
+`.pkg` 并按 macOS 安装器完成安装。安装后打开 Terminal：
 
 ```sh
 moodtag --help
+moodtag <board-url-or-id>
+```
+
+安装包自带运行时，使用 `moodtag` 不需要 Python、`uv`、`npm` 或 Homebrew。
+当前安装包支持 Apple Silicon Mac（M1-M5）。首次运行主命令时，CLI 会自动引导
+API key setup。
+
+如果 macOS 提示无法验证开发者，可在 `.pkg` 上按住 Control 点击，选择“打开”并确认；
+也可以到“系统设置 → 隐私与安全性 → 仍要打开”。
+
+开发者或 Intel Mac 可使用 Python 包安装：
+
+```sh
+uv tool install eagle-app-agent
 ```
 
 如果还没有发布 PyPI，可以临时从 GitHub 安装：
@@ -28,67 +77,45 @@ uv tool install git+https://github.com/Sinyuk7/eagle-app-agent.git
 http://localhost:41595
 ```
 
-模型服务和 API Key 通常由维护者配置。需要本地配置时看 `CONTRIBUTING.md`。
-
-API Key 不写入 `moodtag config` 的 JSON 文件。可使用环境变量、`~/.config/moodtag/.env`，或当前目录的 `.env`：
+API Key 不写入 `moodtag config` 的 JSON 文件。可使用环境变量、
+`~/.config/moodtag/.env`，或当前目录的 `.env`：
 
 ```sh
 export DASHSCOPE_API_KEY='你的 DashScope API Key'
-# 或使用默认 fallback relay：
 export MOODTAG_API_KEY='你的 n1n API Key'
 
-moodtag config show
+moodtag config
 ```
 
-将 `MOODTAG_BASE_URL=https://api.n1n.ai/v1` 时，`MOODTAG_API_KEY`（或 `VL_API_KEY`）会作为 primary Key；同一 URL、model、Key 的 fallback 会自动去重。
+## 3. 高级命令
 
-`config show` 会显示 `primary_api_key: set/unset` 和
-`fallback_api_key: set/unset`。首次运行时会生成带完整字段的
-`~/.config/moodtag/config.json` 模板；其中只包含 URL、model、Eagle API 等非敏感配置。
+主路径之外，现有维护者/高级用户命令仍然保留。
 
-## 2. 找到 Eagle 文件夹 ID
-
-在 Eagle App 左侧文件夹上右键，选择复制链接，会得到类似：
-
-```text
-http://localhost:41595/folder?id=MQBUH98ILYTQ0
-```
-
-取 `id=` 后面的值作为 `--board`：
-
-```text
-MQBUH98ILYTQ0
-```
-
-虽然 `--board` 也支持精确文件夹名或路径，但推荐始终使用文件夹 ID，避免重名。
-
-## 3. 执行
-
-先查看文件夹状态：
+查看文件夹状态：
 
 ```sh
 moodtag status --board 'MQBUH98ILYTQ0'
 ```
 
-只读分析，不写入 Eagle：
+高级 dry run：
 
 ```sh
 moodtag tag --board 'MQBUH98ILYTQ0'
 ```
 
-确认输出后，写回 Eagle：
+显式写回：
 
 ```sh
 moodtag tag --board 'MQBUH98ILYTQ0' --write
 ```
 
-并发处理图片分析：
+并发处理：
 
 ```sh
 moodtag tag --board 'MQBUH98ILYTQ0' --write --concurrency 4
 ```
 
-导出文件夹上下文为 Markdown：
+导出上下文：
 
 ```sh
 moodtag export-context --board 'MQBUH98ILYTQ0' --output context.md

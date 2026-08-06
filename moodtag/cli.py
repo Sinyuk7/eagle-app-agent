@@ -7,6 +7,7 @@ import argparse
 import base64
 import concurrent.futures
 import contextlib
+import getpass
 import json
 import os
 import re
@@ -80,6 +81,7 @@ DEFAULT_TAXONOMY = "default"
 DEFAULT_LOG_KEEP = 50
 DEFAULT_MAX_BOARD_ITEMS = 100
 LEGACY_DEFAULT_TAXONOMY_PATHS = {"taxonomy/default.json", "./taxonomy/default.json"}
+MAIN_FLOW_COMMANDS = {"status", "tag", "brief", "export-context", "reset", "config"}
 SUPPORTED_ORIGINAL_EXTS = {
     ".jpg",
     ".jpeg",
@@ -275,10 +277,14 @@ def models_url(base_url: str) -> str:
 
 
 def load_env_defaults() -> None:
-    user_env = config_path().with_name(".env")
+    user_env = env_file_path()
     if user_env != Path.cwd() / ".env":
         load_env_file(user_env)
     load_env_file(Path.cwd() / ".env")
+
+
+def env_file_path() -> Path:
+    return config_path().with_name(".env")
 
 
 def load_env_file(path: Path) -> None:
@@ -311,6 +317,54 @@ def parse_env_value(raw_value: str) -> str:
     except ValueError as exc:
         raise MoodtagError(f"Invalid quoted env value: {exc}") from exc
     return " ".join(parts)
+
+
+def quote_env_value(value: str) -> str:
+    return shlex.quote(value)
+
+
+def save_env_values(values: dict[str, str], path: Path | None = None) -> Path:
+    path = path or env_file_path()
+    clean = {
+        key: str(value).strip() for key, value in values.items() if str(value).strip()
+    }
+    if not clean:
+        raise MoodtagError("Pass at least one env value to set")
+
+    try:
+        existing_lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        existing_lines = []
+    except OSError as exc:
+        raise MoodtagError(f"Cannot write env file {path}: {exc}") from exc
+
+    rendered: list[str] = []
+    replaced: set[str] = set()
+    for raw_line in existing_lines:
+        stripped = raw_line.strip()
+        candidate = (
+            stripped[len("export ") :].strip()
+            if stripped.startswith("export ")
+            else stripped
+        )
+        key, separator, _value = candidate.partition("=")
+        key = key.strip()
+        if separator and key in clean:
+            rendered.append(f"{key}={quote_env_value(clean[key])}")
+            replaced.add(key)
+        else:
+            rendered.append(raw_line)
+
+    for key, value in clean.items():
+        if key in replaced:
+            continue
+        if rendered and rendered[-1].strip():
+            rendered.append("")
+        rendered.append(f"{key}={quote_env_value(value)}")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(rendered).rstrip() + "\n", encoding="utf-8")
+    return path
 
 
 def env_int(name: str, default: int, *, minimum: int | None = None) -> int:
@@ -357,6 +411,32 @@ def env_bool(name: str, default: bool = False) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     raise MoodtagError(f"{name} must be true or false")
+
+
+def prompt_yes_no(prompt: str, *, default: bool = False) -> bool:
+    suffix = "[Y/n]" if default else "[y/N]"
+    while True:
+        try:
+            answer = input(f"{prompt} {suffix} ").strip().lower()
+        except (EOFError, KeyboardInterrupt) as exc:
+            raise MoodtagError("Setup cancelled.") from exc
+        if not answer:
+            return default
+        if answer in {"y", "yes"}:
+            return True
+        if answer in {"n", "no"}:
+            return False
+        print("Please answer y or n.")
+
+
+def provider_key_env_name(base_url: str) -> str:
+    if is_n1n_base_url(base_url):
+        return "MOODTAG_API_KEY"
+    return "DASHSCOPE_API_KEY"
+
+
+def provider_label(base_url: str) -> str:
+    return "n1n" if is_n1n_base_url(base_url) else "DashScope"
 
 
 def public_attr(name: str) -> Any:
@@ -553,7 +633,22 @@ def parse_item(raw: dict[str, Any]) -> EagleItem:
 
 
 def normalize_board_query(query: str) -> str:
-    return query.strip().strip("/").replace("\\", "/")
+    normalized = query.strip().strip("/").replace("\\", "/")
+    if not normalized:
+        return ""
+    parts = urllib.parse.urlsplit(normalized)
+    if parts.scheme and parts.netloc:
+        params = urllib.parse.parse_qs(parts.query)
+        for key in ("id", "folderId", "folder_id"):
+            values = params.get(key)
+            if values:
+                candidate = values[0].strip()
+                if candidate:
+                    return candidate
+        path_tail = parts.path.rstrip("/").split("/")[-1].strip()
+        if path_tail and path_tail.lower() != "folder":
+            return path_tail
+    return normalized
 
 
 def resolve_board(query: str, boards: list[Board]) -> Board:
@@ -1027,6 +1122,26 @@ def make_vision_client(args: argparse.Namespace) -> VisionClient | MockVisionCli
         max_tokens=args.max_tokens,
         profile=args.profile,
     )
+
+
+def ensure_guided_api_key(args: argparse.Namespace) -> None:
+    if provider_api_key_for_base_url(args.base_url) or provider_api_key_for_base_url(
+        args.fallback_base_url
+    ):
+        return
+    if not sys.stdin.isatty():
+        raise MoodtagError(
+            "No vision API key configured. Run `moodtag config` or open an interactive terminal."
+        )
+    env_name = provider_key_env_name(args.base_url)
+    label = provider_label(args.base_url)
+    print(f"No {label} API key found.")
+    api_key = getpass.getpass(f"Paste {label} API key: ").strip()
+    if not api_key:
+        raise MoodtagError("API key setup cancelled.")
+    path = save_env_values({env_name: api_key})
+    os.environ[env_name] = api_key
+    print(f"Saved {env_name} to {path}")
 
 
 def provider_api_key_for_base_url(base_url: str) -> str | None:
@@ -1567,8 +1682,273 @@ def item_log_record(item: EagleItem, *, index: int, total: int) -> dict[str, Any
     }
 
 
+def command_guided_tag(args: argparse.Namespace) -> int:
+    validate_tag_args(args)
+    eagle = public_attr("EagleClient")(args.eagle_api)
+    eagle.app_info()
+    scope = load_board_scope(
+        eagle,
+        args.board,
+        recursive=not args.no_recursive,
+        max_board_items=args.max_board_items,
+    )
+    board = scope.board
+    items = scope.items
+    if args.limit:
+        pending: list[EagleItem] = []
+        processed: list[EagleItem] = []
+        for item in items:
+            if has_moodboard_notes(item.annotation) and not args.force:
+                processed.append(item)
+            else:
+                pending.append(item)
+        items = pending[: args.limit] + processed
+    if not getattr(args, "mock_vl", False):
+        ensure_guided_api_key(args)
+
+    if not sys.stdin.isatty():
+        raise MoodtagError(
+            "Guided main flow requires an interactive terminal. Use `moodtag tag --board ...` for non-interactive runs."
+        )
+    print(f"Board: {board.path} ({board.id})")
+    print_scope_summary(scope)
+    print(f"Items: {len(items)}")
+    print(
+        f"Model: {args.model or os.environ.get('MOODTAG_MODEL', '') or DEFAULT_MODEL}"
+    )
+    print("API key: ready")
+    print("Overwrite risk: existing tags and annotation will be replaced.")
+
+    if not prompt_yes_no("Start tagging and write these changes?", default=False):
+        print("Cancelled. No changes written.")
+        return 0
+
+    vision = public_attr("make_vision_client")(args)
+    taxonomy = load_taxonomy(Path(args.taxonomy))
+    run_log = make_tag_run_log()
+    print(f"Log: {run_log.path}")
+    print(f"Provider plan: {format_provider_plan(vision)}")
+    run_log.write(
+        "run_start",
+        command="tag",
+        profile=args.profile,
+        mode="guided",
+        board_query=args.board,
+        limit=args.limit,
+        force=args.force,
+        recursive=not args.no_recursive,
+        max_board_items=args.max_board_items,
+        image_edge=args.image_edge,
+        concurrency=args.concurrency,
+        max_tags=args.max_tags,
+        retries=args.retries,
+        provider_plan=provider_plan_records(vision),
+    )
+    run_log.write(
+        "board_loaded",
+        board={"id": board.id, "path": board.path, "name": board.name},
+        scope=[
+            {
+                "id": folder.board.id,
+                "path": folder.board.path,
+                "name": folder.board.name,
+                "items": folder.item_count,
+            }
+            for folder in scope.folders
+        ],
+        items=len(items),
+    )
+
+    work_items: list[tuple[int, EagleItem]] = []
+    skipped_reasons: dict[int, str] = {}
+    for index, item in enumerate(items, start=1):
+        if has_moodboard_notes(item.annotation) and not args.force:
+            skipped_reasons[index] = "already processed"
+        elif reason := unsupported_media_reason(item):
+            skipped_reasons[index] = reason
+        else:
+            work_items.append((index, item))
+
+    probe_result: TagItemResult | None = None
+    if work_items:
+        probe_index, probe_item = work_items[0]
+        probe_result = analyze_tag_item(
+            index=probe_index,
+            item=probe_item,
+            eagle=eagle,
+            vision=vision,
+            taxonomy=taxonomy,
+            image_edge=args.image_edge,
+            retries=args.retries,
+            max_tags=args.max_tags,
+        )
+
+    if probe_result is not None and isinstance(
+        probe_result.error, ProviderAuthenticationError
+    ):
+        print(
+            f"[{probe_result.index}/{len(items)}] failed\t{probe_result.item.id}\t"
+            f"{redact(str(probe_result.error))}"
+        )
+        run_log.write(
+            "item_failed",
+            item=item_log_record(
+                probe_result.item, index=probe_result.index, total=len(items)
+            ),
+            error=redact(str(probe_result.error)),
+            provider_attempts=probe_result.provider_attempts,
+            elapsed_ms=probe_result.elapsed_ms,
+        )
+        run_log.write(
+            "run_aborted",
+            reason=redact(str(probe_result.error)),
+            provider_attempts=probe_result.provider_attempts,
+        )
+        print(f"Board: {board.path} ({board.id})")
+        print_scope_summary(scope)
+        print("Failed: 1")
+        print("Skipped: 0")
+        print("Changed: 0")
+        run_log.write(
+            "run_complete",
+            board={"id": board.id, "path": board.path, "name": board.name},
+            changed=0,
+            skipped=0,
+            failed=1,
+            aborted=True,
+        )
+        return 1
+
+    remaining_work_items = work_items[1:] if probe_result is not None else []
+    remaining_results = list(
+        run_tag_analysis(
+            work_items=remaining_work_items,
+            eagle=eagle,
+            vision=vision,
+            vision_factory=(
+                lambda: public_attr("make_vision_client")(args)
+                if args.concurrency > 1
+                else None
+            ),
+            taxonomy=taxonomy,
+            image_edge=args.image_edge,
+            retries=args.retries,
+            max_tags=args.max_tags,
+            concurrency=args.concurrency,
+        )
+    )
+    planned_total = len(items)
+
+    changed = 0
+    failed = 0
+    skipped = 0
+    action = "write"
+
+    def handle_result(result: TagItemResult) -> tuple[int, int]:
+        if result.error is not None:
+            print(
+                f"[{result.index}/{planned_total}] failed\t{result.item.id}\t"
+                f"{redact(str(result.error))}"
+            )
+            run_log.write(
+                "item_failed",
+                item=item_log_record(
+                    result.item, index=result.index, total=planned_total
+                ),
+                error=redact(str(result.error)),
+                provider_attempts=result.provider_attempts,
+                elapsed_ms=result.elapsed_ms,
+            )
+            return 0, 1
+
+        try:
+            eagle.update_item(
+                result.item.id,
+                tags=result.tags,
+                annotation=result.annotation,
+            )
+        except Exception as exc:  # noqa: BLE001 - per-item isolation
+            print(
+                f"[{result.index}/{planned_total}] failed\t{result.item.id}\t"
+                f"{redact(str(exc))}"
+            )
+            run_log.write(
+                "item_failed",
+                item=item_log_record(
+                    result.item, index=result.index, total=planned_total
+                ),
+                error=redact(str(exc)),
+                provider=result.provider,
+                provider_attempts=result.provider_attempts,
+                elapsed_ms=result.elapsed_ms,
+            )
+            return 0, 1
+        provider = provider_record_summary(result.provider)
+        print(
+            f"[{result.index}/{planned_total}] {action}\t{result.item.id}\t"
+            f"{result.item.name}\t{len(result.tags)} tags\t{provider}"
+        )
+        run_log.write(
+            "item_written",
+            item=item_log_record(result.item, index=result.index, total=planned_total),
+            tags=result.tags,
+            annotation_chars=len(result.annotation),
+        )
+        run_log.write(
+            "item_completed",
+            item=item_log_record(result.item, index=result.index, total=planned_total),
+            action=action,
+            changed=True,
+            tags=result.tags,
+            tag_count=len(result.tags),
+            provider=result.provider,
+            provider_attempts=result.provider_attempts,
+            elapsed_ms=result.elapsed_ms,
+        )
+        return 1, 0
+
+    def emit_skip(index: int, item: EagleItem, reason: str) -> None:
+        nonlocal skipped
+        skipped += 1
+        print(f"[{index}/{planned_total}] skip\t{item.id}\t{item.name}\t{reason}")
+        run_log.write(
+            "item_skipped",
+            item=item_log_record(item, index=index, total=planned_total),
+            reason=reason,
+        )
+
+    result_iter = iter(remaining_results)
+    for index, item in enumerate(items, start=1):
+        if reason := skipped_reasons.get(index):
+            emit_skip(index, item, reason)
+            continue
+        result = (
+            probe_result
+            if probe_result is not None and index == probe_result.index
+            else next(result_iter)
+        )
+        result_changed, result_failed = handle_result(result)
+        changed += result_changed
+        failed += result_failed
+
+    run_log.write(
+        "run_complete",
+        board={"id": board.id, "path": board.path, "name": board.name},
+        changed=changed,
+        skipped=skipped,
+        failed=failed,
+        aborted=False,
+    )
+    print(f"Changed: {changed}")
+    print(f"Skipped: {skipped}")
+    print(f"Failed: {failed}")
+    return 0 if failed == 0 else 1
+
+
 def command_tag(args: argparse.Namespace) -> int:
     validate_tag_args(args)
+    if getattr(args, "guided_main_flow", False):
+        return command_guided_tag(args)
     vision = public_attr("make_vision_client")(args)
     eagle = public_attr("EagleClient")(args.eagle_api)
     eagle.app_info()
@@ -1927,6 +2307,16 @@ def command_config_show(args: argparse.Namespace) -> int:
         "fallback_base_url",
         DEFAULT_FALLBACK_BASE_URL,
     )
+    model = config_value(config, "MOODTAG_MODEL", "model", DEFAULT_MODEL)
+    fallback_model = config_value(
+        config,
+        "MOODTAG_FALLBACK_MODEL",
+        "fallback_model",
+        DEFAULT_FALLBACK_MODEL,
+    )
+    eagle_api = config_value(
+        config, "MOODTAG_EAGLE_API", "eagle_api", DEFAULT_EAGLE_API
+    )
     primary_api_key_set = bool(provider_api_key_for_base_url(primary_base_url))
     fallback_api_key_set = bool(provider_api_key_for_base_url(fallback_base_url))
     view = public_config_view(
@@ -1935,10 +2325,20 @@ def command_config_show(args: argparse.Namespace) -> int:
         primary_api_key_set=primary_api_key_set,
         fallback_api_key_set=fallback_api_key_set,
     )
+    view = {
+        **view,
+        "base_url": primary_base_url,
+        "fallback_base_url": fallback_base_url,
+        "model": model,
+        "fallback_model": fallback_model,
+        "eagle_api": eagle_api,
+        "env_file": str(env_file_path()),
+    }
     if args.json:
         print(json.dumps(view, ensure_ascii=False, sort_keys=True))
         return 0
     print(f"Config: {view['config_path']}")
+    print(f"env_file: {view['env_file']}")
     print(f"base_url: {view['base_url'] or '-'}")
     print(f"fallback_base_url: {view['fallback_base_url'] or '-'}")
     print(f"model: {view['model'] or '-'}")
@@ -1951,12 +2351,34 @@ def command_config_show(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="moodtag")
+    parser = argparse.ArgumentParser(
+        prog="moodtag",
+        usage=(
+            "moodtag <board-url-or-id>\n"
+            "       moodtag [--help|help]\n"
+            "       moodtag config [show|set ...]\n"
+            "       moodtag {status,tag,brief,export-context,reset,config} ..."
+        ),
+        description=(
+            "Primary flow:\n"
+            "  moodtag <board-url-or-id>\n\n"
+            "What it does:\n"
+            "  resolve board -> check setup -> show summary -> confirm -> write\n\n"
+            "Support:\n"
+            "  moodtag --help\n"
+            "  moodtag config\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     sub = parser.add_subparsers(dest="command", required=True)
     user_config = load_user_config()
 
     def common(p: argparse.ArgumentParser) -> None:
-        p.add_argument("--board", required=True, help="Eagle folder id, name, or path")
+        p.add_argument(
+            "--board",
+            required=True,
+            help="Eagle folder URL or ID (name/path also accepted)",
+        )
         p.add_argument(
             "--eagle-api",
             default=config_value(
@@ -2078,6 +2500,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         default=argparse.SUPPRESS,
     )
+    tag.add_argument(
+        "--guided-main-flow",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     tag.set_defaults(func=command_tag)
 
     brief = sub.add_parser("brief", help="Print a board brief from Eagle metadata")
@@ -2104,7 +2531,9 @@ def build_parser() -> argparse.ArgumentParser:
     reset.add_argument("--write", action="store_true")
     reset.set_defaults(func=command_reset)
 
-    config = sub.add_parser("config", help="Manage non-secret moodtag defaults")
+    config = sub.add_parser(
+        "config", help="Manage non-secret moodtag defaults and setup"
+    )
     config_sub = config.add_subparsers(dest="config_command", required=True)
     config_set = config_sub.add_parser("set", help="Set non-secret user defaults")
     config_set.add_argument("--base-url", default="")
@@ -2119,9 +2548,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def rewrite_main_argv(argv: list[str]) -> tuple[list[str], bool]:
+    if not argv:
+        return argv, False
+    first = argv[0]
+    if first == "config" and (len(argv) == 1 or argv[1].startswith("-")):
+        return ["config", "show", *argv[1:]], False
+    if first.startswith("-") or first in MAIN_FLOW_COMMANDS:
+        return argv, False
+    return ["tag", "--board", first, "--guided-main-flow", *argv[1:]], True
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         load_env_defaults()
+        argv = list(sys.argv[1:] if argv is None else argv)
+        if argv and argv[0] == "help":
+            build_parser().print_help()
+            return 0
+        argv, _guided = rewrite_main_argv(argv)
         parser = build_parser()
         args = parser.parse_args(argv)
         return int(args.func(args) or 0)
