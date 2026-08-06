@@ -73,7 +73,7 @@ from .config import (
 
 DEFAULT_EAGLE_API = "http://localhost:41595"
 DEFAULT_IMAGE_EDGE = 768
-DEFAULT_CONCURRENCY = 4
+DEFAULT_CONCURRENCY = 5
 DEFAULT_MAX_TAGS = 15
 DEFAULT_RETRIES = 2
 DEFAULT_USER_AGENT = "moodtag/0.1"
@@ -169,6 +169,8 @@ class TagItemResult:
     annotation: str = ""
     provider: dict[str, Any] = field(default_factory=dict)
     provider_attempts: list[dict[str, Any]] = field(default_factory=list)
+    timings_ms: dict[str, int] = field(default_factory=dict)
+    source_strategy: str = ""
     elapsed_ms: int = 0
     error: Exception | None = None
 
@@ -1142,6 +1144,7 @@ def analyze_tag_item(
     item: EagleItem,
     eagle: Any,
     vision: VisionClient | MockVisionClient,
+    image_root: Path | None = None,
     taxonomy: dict[str, list[str]],
     image_edge: int,
     retries: int,
@@ -1149,18 +1152,38 @@ def analyze_tag_item(
 ) -> TagItemResult:
     item_started = time.monotonic()
     clear_provider_trace(vision)
+    source_lookup_ms = 0
+    preview_ms = 0
+    vision_ms = 0
+    source_strategy = ""
     try:
-        thumbnail = eagle.thumbnail_path(item.id)
-        original = locate_original_from_thumbnail(thumbnail, item)
+        source_started = time.monotonic()
+        original: Path | None = None
+        if image_root is not None:
+            with contextlib.suppress(Exception):
+                original = locate_original_in_info_dir(
+                    image_root / f"{item.id}.info", item
+                )
+                source_strategy = "library_root"
+        if original is None:
+            source_strategy = "thumbnail_fallback"
+            original = locate_original_from_thumbnail(eagle.thumbnail_path(item.id), item)
+        source_lookup_ms = elapsed_ms_since(source_started)
+
+        preview_started = time.monotonic()
         with temporary_preview(original, image_edge=image_edge) as preview:
+            preview_ms = elapsed_ms_since(preview_started)
+            vision_started = time.monotonic()
             result = vision.analyze(
                 preview.path,
                 taxonomy,
                 retries=retries,
                 max_tags=max_tags,
             )
+            vision_ms = elapsed_ms_since(vision_started)
         validate_vl_result(result)
         tags, _rejected = reconcile_tags(result, taxonomy, max_tags=max_tags)
+        analysis_total_ms = elapsed_ms_since(item_started)
         return TagItemResult(
             index=index,
             item=item,
@@ -1168,15 +1191,30 @@ def analyze_tag_item(
             annotation=build_notes_block(result),
             provider=provider_record(vision),
             provider_attempts=provider_attempt_records(vision),
-            elapsed_ms=elapsed_ms_since(item_started),
+            timings_ms={
+                "source_lookup_ms": source_lookup_ms,
+                "preview_ms": preview_ms,
+                "vision_ms": vision_ms,
+                "analysis_total_ms": analysis_total_ms,
+            },
+            source_strategy=source_strategy,
+            elapsed_ms=analysis_total_ms,
         )
     except Exception as exc:  # noqa: BLE001 - per-item isolation
+        analysis_total_ms = elapsed_ms_since(item_started)
         return TagItemResult(
             index=index,
             item=item,
             provider=provider_record(vision),
             provider_attempts=provider_attempt_records(vision),
-            elapsed_ms=elapsed_ms_since(item_started),
+            timings_ms={
+                "source_lookup_ms": source_lookup_ms,
+                "preview_ms": preview_ms,
+                "vision_ms": vision_ms,
+                "analysis_total_ms": analysis_total_ms,
+            },
+            source_strategy=source_strategy,
+            elapsed_ms=analysis_total_ms,
             error=exc,
         )
 
@@ -1187,6 +1225,7 @@ def run_tag_analysis(
     eagle: Any,
     vision: VisionClient | MockVisionClient,
     vision_factory: Callable[[], VisionClient | MockVisionClient] | None = None,
+    image_root: Path | None = None,
     taxonomy: dict[str, list[str]],
     image_edge: int,
     retries: int,
@@ -1200,6 +1239,7 @@ def run_tag_analysis(
                 item=item,
                 eagle=eagle,
                 vision=vision,
+                image_root=image_root,
                 taxonomy=taxonomy,
                 image_edge=image_edge,
                 retries=retries,
@@ -1225,6 +1265,7 @@ def run_tag_analysis(
                 item=item,
                 eagle=eagle,
                 vision=worker_vision,
+                image_root=image_root,
                 taxonomy=taxonomy,
                 image_edge=image_edge,
                 retries=retries,
@@ -1639,6 +1680,49 @@ def item_log_record(item: EagleItem, *, index: int, total: int) -> dict[str, Any
     }
 
 
+def timing_keys() -> tuple[str, ...]:
+    return (
+        "source_lookup_ms",
+        "preview_ms",
+        "vision_ms",
+        "analysis_total_ms",
+        "write_ms",
+    )
+
+
+def timing_totals_record() -> dict[str, int]:
+    return {key: 0 for key in timing_keys()}
+
+
+def timing_counts_record() -> dict[str, int]:
+    return {key: 0 for key in timing_keys()}
+
+
+def merge_timings(
+    timings_ms: dict[str, int], *, write_ms: int | None = None
+) -> dict[str, int]:
+    merged = {
+        key: max(0, int(value))
+        for key, value in timings_ms.items()
+        if key in set(timing_keys())
+    }
+    if write_ms is not None:
+        merged["write_ms"] = max(0, int(write_ms))
+    return merged
+
+
+def record_timing_totals(
+    timing_totals_ms: dict[str, int],
+    timing_item_counts: dict[str, int],
+    timings_ms: dict[str, int],
+) -> None:
+    for key, value in timings_ms.items():
+        if key not in timing_totals_ms:
+            continue
+        timing_totals_ms[key] += max(0, int(value))
+        timing_item_counts[key] += 1
+
+
 def command_guided_tag(args: argparse.Namespace) -> int:
     validate_tag_args(args)
     eagle = public_attr("EagleClient")(args.eagle_api)
@@ -1682,6 +1766,7 @@ def command_guided_tag(args: argparse.Namespace) -> int:
 
     vision = public_attr("make_vision_client")(args)
     taxonomy = load_profile_taxonomy(args.profile)
+    image_root = eagle_library_images_root(eagle)
     run_log = make_tag_run_log()
     print(f"Log: {run_log.path}")
     print(f"Provider plan: {format_provider_plan(vision)}")
@@ -1716,6 +1801,14 @@ def command_guided_tag(args: argparse.Namespace) -> int:
         items=len(items),
     )
 
+    changed = 0
+    failed = 0
+    skipped = 0
+    total = len(items)
+    action = "write"
+    timing_totals_ms = timing_totals_record()
+    timing_item_counts = timing_counts_record()
+
     work_items: list[tuple[int, EagleItem]] = []
     skipped_reasons: dict[int, str] = {}
     for index, item in enumerate(items, start=1):
@@ -1734,6 +1827,7 @@ def command_guided_tag(args: argparse.Namespace) -> int:
             item=probe_item,
             eagle=eagle,
             vision=vision,
+            image_root=image_root,
             taxonomy=taxonomy,
             image_edge=args.image_edge,
             retries=args.retries,
@@ -1744,17 +1838,22 @@ def command_guided_tag(args: argparse.Namespace) -> int:
         probe_result.error, ProviderAuthenticationError
     ):
         print(
-            f"[{probe_result.index}/{len(items)}] failed\t{probe_result.item.id}\t"
+            f"[{probe_result.index}/{total}] failed\t{probe_result.item.id}\t"
             f"{redact(str(probe_result.error))}"
         )
         run_log.write(
             "item_failed",
             item=item_log_record(
-                probe_result.item, index=probe_result.index, total=len(items)
+                probe_result.item, index=probe_result.index, total=total
             ),
             error=redact(str(probe_result.error)),
             provider_attempts=probe_result.provider_attempts,
+            timings_ms=merge_timings(probe_result.timings_ms),
+            source_strategy=probe_result.source_strategy,
             elapsed_ms=probe_result.elapsed_ms,
+        )
+        record_timing_totals(
+            timing_totals_ms, timing_item_counts, merge_timings(probe_result.timings_ms)
         )
         run_log.write(
             "run_aborted",
@@ -1769,55 +1868,56 @@ def command_guided_tag(args: argparse.Namespace) -> int:
         run_log.write(
             "run_complete",
             board={"id": board.id, "path": board.path, "name": board.name},
-            changed=0,
+            changed=changed,
             skipped=0,
             failed=1,
             aborted=True,
+            timing_totals_ms=timing_totals_ms,
+            timing_item_counts=timing_item_counts,
         )
         return 1
 
     remaining_work_items = work_items[1:] if probe_result is not None else []
-    remaining_results = list(
-        run_tag_analysis(
-            work_items=remaining_work_items,
-            eagle=eagle,
-            vision=vision,
-            vision_factory=(
-                lambda: public_attr("make_vision_client")(args)
-                if args.concurrency > 1
-                else None
-            ),
-            taxonomy=taxonomy,
-            image_edge=args.image_edge,
-            retries=args.retries,
-            max_tags=args.max_tags,
-            concurrency=args.concurrency,
-        )
+    remaining_results = run_tag_analysis(
+        work_items=remaining_work_items,
+        eagle=eagle,
+        vision=vision,
+        vision_factory=(
+            lambda: public_attr("make_vision_client")(args)
+            if args.concurrency > 1
+            else None
+        ),
+        image_root=image_root,
+        taxonomy=taxonomy,
+        image_edge=args.image_edge,
+        retries=args.retries,
+        max_tags=args.max_tags,
+        concurrency=args.concurrency,
     )
-    planned_total = len(items)
-
-    changed = 0
-    failed = 0
-    skipped = 0
-    action = "write"
 
     def handle_result(result: TagItemResult) -> tuple[int, int]:
         if result.error is not None:
             print(
-                f"[{result.index}/{planned_total}] failed\t{result.item.id}\t"
+                f"[{result.index}/{total}] failed\t{result.item.id}\t"
                 f"{redact(str(result.error))}"
             )
             run_log.write(
                 "item_failed",
                 item=item_log_record(
-                    result.item, index=result.index, total=planned_total
+                    result.item, index=result.index, total=total
                 ),
                 error=redact(str(result.error)),
                 provider_attempts=result.provider_attempts,
+                timings_ms=merge_timings(result.timings_ms),
+                source_strategy=result.source_strategy,
                 elapsed_ms=result.elapsed_ms,
+            )
+            record_timing_totals(
+                timing_totals_ms, timing_item_counts, merge_timings(result.timings_ms)
             )
             return 0, 1
 
+        write_started = time.monotonic()
         try:
             eagle.update_item(
                 result.item.id,
@@ -1826,40 +1926,55 @@ def command_guided_tag(args: argparse.Namespace) -> int:
             )
         except Exception as exc:  # noqa: BLE001 - per-item isolation
             print(
-                f"[{result.index}/{planned_total}] failed\t{result.item.id}\t"
+                f"[{result.index}/{total}] failed\t{result.item.id}\t"
                 f"{redact(str(exc))}"
             )
             run_log.write(
                 "item_failed",
                 item=item_log_record(
-                    result.item, index=result.index, total=planned_total
+                    result.item, index=result.index, total=total
                 ),
                 error=redact(str(exc)),
                 provider=result.provider,
                 provider_attempts=result.provider_attempts,
+                timings_ms=merge_timings(
+                    result.timings_ms, write_ms=elapsed_ms_since(write_started)
+                ),
+                source_strategy=result.source_strategy,
                 elapsed_ms=result.elapsed_ms,
             )
+            record_timing_totals(
+                timing_totals_ms,
+                timing_item_counts,
+                merge_timings(result.timings_ms, write_ms=elapsed_ms_since(write_started)),
+            )
             return 0, 1
+        timings_ms = merge_timings(
+            result.timings_ms, write_ms=elapsed_ms_since(write_started)
+        )
+        record_timing_totals(timing_totals_ms, timing_item_counts, timings_ms)
         provider = provider_record_summary(result.provider)
         print(
-            f"[{result.index}/{planned_total}] {action}\t{result.item.id}\t"
+            f"[{result.index}/{total}] {action}\t{result.item.id}\t"
             f"{result.item.name}\t{len(result.tags)} tags\t{provider}"
         )
         run_log.write(
             "item_written",
-            item=item_log_record(result.item, index=result.index, total=planned_total),
+            item=item_log_record(result.item, index=result.index, total=total),
             tags=result.tags,
             annotation_chars=len(result.annotation),
         )
         run_log.write(
             "item_completed",
-            item=item_log_record(result.item, index=result.index, total=planned_total),
+            item=item_log_record(result.item, index=result.index, total=total),
             action=action,
             changed=True,
             tags=result.tags,
             tag_count=len(result.tags),
             provider=result.provider,
             provider_attempts=result.provider_attempts,
+            timings_ms=timings_ms,
+            source_strategy=result.source_strategy,
             elapsed_ms=result.elapsed_ms,
         )
         return 1, 0
@@ -1867,10 +1982,10 @@ def command_guided_tag(args: argparse.Namespace) -> int:
     def emit_skip(index: int, item: EagleItem, reason: str) -> None:
         nonlocal skipped
         skipped += 1
-        print(f"[{index}/{planned_total}] skip\t{item.id}\t{item.name}\t{reason}")
+        print(f"[{index}/{total}] skip\t{item.id}\t{item.name}\t{reason}")
         run_log.write(
             "item_skipped",
-            item=item_log_record(item, index=index, total=planned_total),
+            item=item_log_record(item, index=index, total=total),
             reason=reason,
         )
 
@@ -1895,6 +2010,8 @@ def command_guided_tag(args: argparse.Namespace) -> int:
         skipped=skipped,
         failed=failed,
         aborted=False,
+        timing_totals_ms=timing_totals_ms,
+        timing_item_counts=timing_item_counts,
     )
     print(f"Changed: {changed}")
     print(f"Skipped: {skipped}")
@@ -1918,6 +2035,7 @@ def command_tag(args: argparse.Namespace) -> int:
     board = scope.board
     items = scope.items
     taxonomy = load_profile_taxonomy(args.profile)
+    image_root = eagle_library_images_root(eagle)
     run_log = make_tag_run_log()
     print(f"Log: {run_log.path}")
     print(f"Provider plan: {format_provider_plan(vision)}")
@@ -1951,6 +2069,8 @@ def command_tag(args: argparse.Namespace) -> int:
     skipped = 0
     total = len(items)
     action = "write" if args.write else "dry-run"
+    timing_totals_ms = timing_totals_record()
+    timing_item_counts = timing_counts_record()
     run_log.write(
         "board_loaded",
         board={"id": board.id, "path": board.path, "name": board.name},
@@ -1968,6 +2088,8 @@ def command_tag(args: argparse.Namespace) -> int:
 
     def handle_result(result: TagItemResult) -> tuple[int, int]:
         if result.error is not None:
+            timings_ms = merge_timings(result.timings_ms)
+            record_timing_totals(timing_totals_ms, timing_item_counts, timings_ms)
             print(
                 f"[{result.index}/{total}] failed\t{result.item.id}\t"
                 f"{redact(str(result.error))}"
@@ -1977,6 +2099,8 @@ def command_tag(args: argparse.Namespace) -> int:
                 item=item_log_record(result.item, index=result.index, total=total),
                 error=redact(str(result.error)),
                 provider_attempts=result.provider_attempts,
+                timings_ms=timings_ms,
+                source_strategy=result.source_strategy,
                 elapsed_ms=result.elapsed_ms,
             )
             if args.fail_fast and not isinstance(
@@ -1986,6 +2110,7 @@ def command_tag(args: argparse.Namespace) -> int:
             return 0, 1
 
         if args.write:
+            write_started = time.monotonic()
             try:
                 eagle.update_item(
                     result.item.id,
@@ -1993,6 +2118,10 @@ def command_tag(args: argparse.Namespace) -> int:
                     annotation=result.annotation,
                 )
             except Exception as exc:  # noqa: BLE001 - per-item isolation
+                timings_ms = merge_timings(
+                    result.timings_ms, write_ms=elapsed_ms_since(write_started)
+                )
+                record_timing_totals(timing_totals_ms, timing_item_counts, timings_ms)
                 print(
                     f"[{result.index}/{total}] failed\t{result.item.id}\t"
                     f"{redact(str(exc))}"
@@ -2003,17 +2132,26 @@ def command_tag(args: argparse.Namespace) -> int:
                     error=redact(str(exc)),
                     provider=result.provider,
                     provider_attempts=result.provider_attempts,
+                    timings_ms=timings_ms,
+                    source_strategy=result.source_strategy,
                     elapsed_ms=result.elapsed_ms,
                 )
                 if args.fail_fast:
                     raise
                 return 0, 1
+            timings_ms = merge_timings(
+                result.timings_ms, write_ms=elapsed_ms_since(write_started)
+            )
+            record_timing_totals(timing_totals_ms, timing_item_counts, timings_ms)
             run_log.write(
                 "item_written",
                 item=item_log_record(result.item, index=result.index, total=total),
                 tags=result.tags,
                 annotation_chars=len(result.annotation),
             )
+        else:
+            timings_ms = merge_timings(result.timings_ms)
+            record_timing_totals(timing_totals_ms, timing_item_counts, timings_ms)
 
         provider = provider_record_summary(result.provider)
         print(
@@ -2029,6 +2167,8 @@ def command_tag(args: argparse.Namespace) -> int:
             tag_count=len(result.tags),
             provider=result.provider,
             provider_attempts=result.provider_attempts,
+            timings_ms=timings_ms,
+            source_strategy=result.source_strategy,
             elapsed_ms=result.elapsed_ms,
         )
         return 1, 0
@@ -2051,6 +2191,7 @@ def command_tag(args: argparse.Namespace) -> int:
             item=probe_item,
             eagle=eagle,
             vision=vision,
+            image_root=image_root,
             taxonomy=taxonomy,
             image_edge=args.image_edge,
             retries=args.retries,
@@ -2082,6 +2223,8 @@ def command_tag(args: argparse.Namespace) -> int:
             skipped=skipped,
             failed=failed,
             aborted=aborted,
+            timing_totals_ms=timing_totals_ms,
+            timing_item_counts=timing_item_counts,
         )
         return 0 if failed == 0 else 1
 
@@ -2113,6 +2256,7 @@ def command_tag(args: argparse.Namespace) -> int:
             if args.concurrency > 1
             else None
         ),
+        image_root=image_root,
         taxonomy=taxonomy,
         image_edge=args.image_edge,
         retries=args.retries,

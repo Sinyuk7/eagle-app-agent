@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cache
 from importlib import resources
 from pathlib import Path
 
@@ -61,26 +62,38 @@ def resolve_profile(profile: str) -> PromptProfile:
         ) from exc
 
 
+@cache
+def _read_resource_template(resource_name: str) -> str:
+    text = (
+        resources.files(PROMPT_PACKAGE)
+        .joinpath(resource_name)
+        .read_text(encoding="utf-8")
+        .strip()
+    )
+    if not text:
+        raise CoreError(f"Prompt template is empty: {resource_name}")
+    return text
+
+
+@cache
+def _read_path_template(path_text: str) -> str:
+    path = Path(path_text)
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        raise CoreError(f"Prompt template is empty: {path}")
+    return text
+
+
 def read_template(path: Path | None = None, *, resource_name: str | None = None) -> str:
     try:
         if resource_name:
-            text = (
-                resources.files(PROMPT_PACKAGE)
-                .joinpath(resource_name)
-                .read_text(encoding="utf-8")
-                .strip()
-            )
-            label = resource_name
+            return _read_resource_template(resource_name)
         elif path is not None:
-            text = path.read_text(encoding="utf-8").strip()
-            label = str(path)
+            return _read_path_template(str(path))
         else:
             raise CoreError("Missing prompt template path")
     except FileNotFoundError as exc:
         raise CoreError(f"Prompt template not found: {resource_name or path}") from exc
-    if not text:
-        raise CoreError(f"Prompt template is empty: {label}")
-    return text
 
 
 def read_system_prompt(path: Path | None = None, *, profile: str = "default") -> str:

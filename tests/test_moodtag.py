@@ -62,6 +62,21 @@ def write_png(path: Path) -> None:
     path.write_bytes(base64.b64decode(PNG_1X1))
 
 
+@contextmanager
+def source_preview(source: Path, *, image_edge: int):
+    del image_edge
+    yield moodtag.Preview(source, source, 1, 1, 1, 1)
+
+
+def read_run_records(root: Path) -> list[dict[str, object]]:
+    logs = sorted(root.glob("moodtag-*.jsonl"))
+    return [
+        json.loads(line)
+        for line in logs[0].read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
 def analysis_payload(brief: str = "测试 brief"):
     return {
         "brief": brief,
@@ -709,7 +724,8 @@ class MoodtagTests(unittest.TestCase):
         self.assertEqual(args.model, DEFAULT_MODEL)
         self.assertEqual(args.fallback_model, DEFAULT_FALLBACK_MODEL)
         self.assertEqual(args.image_edge, moodtag.DEFAULT_IMAGE_EDGE)
-        self.assertEqual(args.concurrency, moodtag.DEFAULT_CONCURRENCY)
+        self.assertEqual(moodtag.DEFAULT_CONCURRENCY, 5)
+        self.assertEqual(args.concurrency, 5)
         self.assertEqual(args.temperature, DEFAULT_TEMPERATURE)
         self.assertEqual(args.top_p, DEFAULT_TOP_P)
         self.assertEqual(args.max_tokens, DEFAULT_MAX_TOKENS)
@@ -1027,6 +1043,205 @@ class MoodtagTests(unittest.TestCase):
         self.assertEqual(completed[0]["provider"]["name"], "mock")
         self.assertEqual(completed[0]["provider_attempts"][0]["ok"], True)
         self.assertFalse(fake.updated)
+
+    def test_guided_flow_streams_writes_before_analysis_exhausts(self):
+        fake, tmp = make_fake_eagle(pending_count=3)
+
+        def make_result(index, item, brief):
+            analysis = moodtag.normalize_vl_result(
+                analysis_payload(brief),
+                taxonomy={"medium": ["photo"]},
+            )
+            return moodtag.TagItemResult(
+                index=index,
+                item=item,
+                tags=list(analysis.tags),
+                annotation=build_annotation_block(analysis),
+                provider={
+                    "name": "mock",
+                    "base_url": "mock://local",
+                    "model": "mock-vision",
+                },
+                timings_ms={
+                    "source_lookup_ms": 1,
+                    "preview_ms": 2,
+                    "vision_ms": 3,
+                    "analysis_total_ms": 6,
+                },
+                source_strategy="thumbnail_fallback",
+                elapsed_ms=6,
+            )
+
+        probe_result = make_result(1, fake.items[0], "guided probe")
+        second_result = make_result(2, fake.items[1], "guided second")
+        third_result = make_result(3, fake.items[2], "guided third")
+
+        def fake_run_tag_analysis(**kwargs):
+            del kwargs
+
+            def generator():
+                yield second_result
+                self.assertEqual(
+                    [item_id for item_id, _, _ in fake.updated],
+                    ["I1", "I3"],
+                )
+                yield third_result
+
+            return generator()
+
+        try:
+            with mock.patch.object(moodtag, "EagleClient", return_value=fake):
+                with mock.patch.object(
+                    moodtag, "analyze_tag_item", return_value=probe_result
+                ):
+                    with mock.patch.object(
+                        moodtag, "run_tag_analysis", side_effect=fake_run_tag_analysis
+                    ):
+                        with mock.patch.object(
+                            moodtag.sys.stdin, "isatty", return_value=True
+                        ):
+                            with mock.patch("builtins.input", return_value="y"):
+                                with redirect_stdout(io.StringIO()):
+                                    code = moodtag.main(["Board", "--mock-vl"])
+        finally:
+            tmp.cleanup()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            [item_id for item_id, _, _ in fake.updated],
+            ["I1", "I3", "I4"],
+        )
+
+    def test_tag_uses_library_root_before_thumbnail_lookup(self):
+        fake, tmp = make_fake_eagle()
+        root = Path(tmp.name)
+        image_root = root / "images"
+        image_root.mkdir()
+        shutil.copytree(root / "I1.info", image_root / "I1.info")
+        fake.library_info = lambda: {"library": {"path": str(root)}}  # noqa: E731
+        fake.thumbnail_path = mock.Mock(
+            side_effect=AssertionError("thumbnail fallback used")
+        )
+
+        try:
+            with mock.patch.object(moodtag, "EagleClient", return_value=fake):
+                with mock.patch("moodtag.cli.temporary_preview", source_preview):
+                    with redirect_stdout(io.StringIO()):
+                        code = moodtag.main(
+                            [
+                                "tag",
+                                "--board",
+                                "Board",
+                                "--mock-vl",
+                                "--write",
+                                "--limit",
+                                "1",
+                            ]
+                        )
+        finally:
+            tmp.cleanup()
+
+        self.assertEqual(code, 0)
+        self.assertEqual([item_id for item_id, _, _ in fake.updated], ["I1"])
+
+    def test_tag_falls_back_to_thumbnail_when_library_lookup_fails(self):
+        fake, tmp = make_fake_eagle()
+        original_thumbnail_path = fake.thumbnail_path
+        fake.library_info = mock.Mock(side_effect=RuntimeError("missing library root"))
+        fake.thumbnail_path = mock.Mock(side_effect=original_thumbnail_path)
+
+        try:
+            with mock.patch.object(moodtag, "EagleClient", return_value=fake):
+                with mock.patch("moodtag.cli.temporary_preview", source_preview):
+                    with redirect_stdout(io.StringIO()):
+                        code = moodtag.main(
+                            [
+                                "tag",
+                                "--board",
+                                "Board",
+                                "--mock-vl",
+                                "--write",
+                                "--limit",
+                                "1",
+                            ]
+                        )
+        finally:
+            tmp.cleanup()
+
+        self.assertEqual(code, 0)
+        self.assertEqual([item_id for item_id, _, _ in fake.updated], ["I1"])
+        fake.thumbnail_path.assert_called_once_with("I1")
+
+    def test_tag_logs_timing_fields_and_source_strategy(self):
+        fake, tmp = make_fake_eagle()
+        try:
+            with mock.patch.object(moodtag, "EagleClient", return_value=fake):
+                with mock.patch("moodtag.cli.temporary_preview", source_preview):
+                    with redirect_stdout(io.StringIO()):
+                        code = moodtag.main(
+                            [
+                                "tag",
+                                "--board",
+                                "Board",
+                                "--mock-vl",
+                                "--write",
+                                "--limit",
+                                "1",
+                            ]
+                        )
+        finally:
+            tmp.cleanup()
+
+        self.assertEqual(code, 0)
+        records = read_run_records(Path(self._log_tmp.name))
+        completed = [
+            record for record in records if record["event"] == "item_completed"
+        ]
+        self.assertEqual(len(completed), 1)
+        timings = completed[0]["timings_ms"]
+        self.assertEqual(completed[0]["source_strategy"], "thumbnail_fallback")
+        self.assertEqual(
+            sorted(timings.keys()),
+            sorted(
+                [
+                    "source_lookup_ms",
+                    "preview_ms",
+                    "vision_ms",
+                    "analysis_total_ms",
+                    "write_ms",
+                ]
+            ),
+        )
+        self.assertTrue(
+            all(isinstance(value, int) and value >= 0 for value in timings.values())
+        )
+        run_complete = [
+            record for record in records if record["event"] == "run_complete"
+        ][0]
+        self.assertEqual(
+            sorted(run_complete["timing_totals_ms"].keys()),
+            sorted(
+                [
+                    "source_lookup_ms",
+                    "preview_ms",
+                    "vision_ms",
+                    "analysis_total_ms",
+                    "write_ms",
+                ]
+            ),
+        )
+        self.assertEqual(
+            sorted(run_complete["timing_item_counts"].keys()),
+            sorted(
+                [
+                    "source_lookup_ms",
+                    "preview_ms",
+                    "vision_ms",
+                    "analysis_total_ms",
+                    "write_ms",
+                ]
+            ),
+        )
 
     def test_status_recurses_into_child_folders_by_default(self):
         parent = moodtag.EagleItem(
