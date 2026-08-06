@@ -9,7 +9,7 @@ The system SHALL persist the last confirmed profile as a non-secret user configu
 
 #### Scenario: Missing profile
 - **WHEN** no persisted profile exists
-- **THEN** the CLI SHALL use `default`
+- **THEN** the CLI SHALL use `editorial`
 
 ### Requirement: Profile precedence
 The system SHALL apply a one-run CLI profile override without changing the persisted profile.

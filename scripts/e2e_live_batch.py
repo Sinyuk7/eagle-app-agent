@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import moodtag  # noqa: E402
+from moodtag_core.catalog import protocol_for_model  # noqa: E402
 from moodtag_core.prompts import resolve_profile  # noqa: E402
 from moodtag_core.provider import models_url, protocol_url  # noqa: E402
 
@@ -223,17 +227,12 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get("MOODTAG_EAGLE_API", moodtag.DEFAULT_EAGLE_API),
     )
     parser.add_argument(
-        "--protocol",
-        default=os.environ.get("MOODTAG_PROTOCOL", "responses"),
-        choices=("chat", "responses"),
-    )
-    parser.add_argument(
         "--base-url",
         required=True,
     )
-    parser.add_argument("--model", default=os.environ.get("MOODTAG_MODEL", ""))
+    parser.add_argument("--model", required=True)
     parser.add_argument("--discover-models", action="store_true")
-    parser.add_argument("--profile", default="default")
+    parser.add_argument("--profile", default="editorial")
     parser.add_argument(
         "--image-edge",
         type=int,
@@ -294,8 +293,10 @@ def main() -> int:
     model_base_url = args.base_url
     if not model_api_key:
         raise SystemExit("MOODTAG_API_KEY is required")
-    if not args.model:
-        raise SystemExit("MOODTAG_MODEL or --model is required")
+    try:
+        args.protocol = protocol_for_model(args.model)
+    except Exception as exc:
+        raise SystemExit(str(exc)) from exc
 
     report_dir = Path(args.report_dir)
     client = moodtag.EagleClient(args.eagle_api)
@@ -336,10 +337,7 @@ def main() -> int:
     env.update(
         {
             "MOODTAG_EAGLE_API": args.eagle_api,
-            "MOODTAG_PROTOCOL": args.protocol,
-            "MOODTAG_BASE_URL": args.base_url,
             "MOODTAG_API_KEY": model_api_key,
-            "MOODTAG_MODEL": model,
             "MOODTAG_IMAGE_EDGE": str(args.image_edge),
             "MOODTAG_TEMPERATURE": str(args.temperature),
             "MOODTAG_TOP_P": str(args.top_p),
@@ -349,6 +347,13 @@ def main() -> int:
             else "false",
         }
     )
+    config_root = Path(tempfile.mkdtemp(prefix="moodtag-e2e-config-"))
+    atexit.register(shutil.rmtree, config_root, ignore_errors=True)
+    config_file = config_root / "config.json"
+    config_file.write_text(
+        json.dumps({"base_url": args.base_url, "model": model}), encoding="utf-8"
+    )
+    env["MOODTAG_CONFIG"] = str(config_file)
 
     runs: list[RunResult] = []
     if args.reset_first:

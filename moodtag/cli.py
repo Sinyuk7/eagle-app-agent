@@ -37,10 +37,13 @@ from moodtag_core.annotation import (
     remove_analysis_annotation,
     replace_analysis_annotation,
 )
+from moodtag_core.catalog import (
+    models_for_protocol,
+    protocol_for_model,
+)
 from moodtag_core.contract import (
     DEFAULT_MAX_TOKENS,
     DEFAULT_NO_RESPONSE_FORMAT,
-    DEFAULT_PROTOCOL,
     DEFAULT_TEMPERATURE,
     DEFAULT_TOP_P,
     MIN_MAX_TOKENS,
@@ -67,6 +70,11 @@ from .config import (
     save_user_config,
     update_user_config,
 )
+from .ui.ansi import clear_line, supports_cursor
+from .ui.menu import MenuCancelled, choose
+from .ui.printer import Printer
+from .ui.session import Session
+from .ui.spinner import spinner
 
 DEFAULT_EAGLE_API = "http://localhost:41595"
 DEFAULT_IMAGE_EDGE = 768
@@ -76,6 +84,11 @@ DEFAULT_RETRIES = 2
 DEFAULT_USER_AGENT = "moodtag/0.1"
 DEFAULT_LOG_KEEP = 50
 DEFAULT_MAX_BOARD_ITEMS = 100
+DEFAULT_PROFILE = "editorial"
+TAGGING_STYLE_NAMES = {
+    "editorial": "Editorial",
+    "default": "General",
+}
 MAIN_FLOW_COMMANDS = {"status", "tag", "brief", "export-context", "reset", "config"}
 SUPPORTED_ORIGINAL_EXTS = {
     ".jpg",
@@ -91,6 +104,47 @@ SUPPORTED_ORIGINAL_EXTS = {
 
 class MoodtagError(CoreError):
     """Expected runtime error shown without traceback."""
+
+
+class SetupCancelled(MoodtagError):
+    """Interactive model setup ended without changing configuration."""
+
+
+def tagging_style_name(profile: str) -> str:
+    return TAGGING_STYLE_NAMES.get(profile, profile)
+
+
+@dataclass(frozen=True)
+class RunResult:
+    """Stable final result for both human and JSON command paths."""
+
+    board: str
+    total: int
+    selected: int
+    changed: int
+    skipped: int
+    failed: int
+    cancelled: bool = False
+    error: str = ""
+
+    @property
+    def exit_code(self) -> int:
+        if self.cancelled:
+            return 130
+        return 1 if self.failed else 0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "board": self.board,
+            "total": self.total,
+            "selected": self.selected,
+            "changed": self.changed,
+            "skipped": self.skipped,
+            "failed": self.failed,
+            "cancelled": self.cancelled,
+            "error": self.error,
+            "exit_code": self.exit_code,
+        }
 
 
 @dataclass(frozen=True)
@@ -245,10 +299,15 @@ def url_join(base: str, path: str) -> str:
 
 
 def load_env_defaults() -> None:
+    inherited_api_key = bool(os.environ.get("MOODTAG_API_KEY", "").strip())
     user_env = env_file_path()
     if user_env != Path.cwd() / ".env":
         load_env_file(user_env)
     load_env_file(Path.cwd() / ".env")
+    if os.environ.get("MOODTAG_API_KEY", "").strip():
+        os.environ["_MOODTAG_API_KEY_SOURCE"] = (
+            "environment override" if inherited_api_key else "saved credential"
+        )
 
 
 def env_file_path() -> Path:
@@ -339,6 +398,25 @@ def save_env_values(values: dict[str, str], path: Path | None = None) -> Path:
     return path
 
 
+def remove_env_value(key: str, path: Path | None = None) -> Path:
+    path = path or env_file_path()
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return path
+    kept = [
+        line
+        for line in lines
+        if not re.match(rf"\s*(?:export\s+)?{re.escape(key)}\s*=", line)
+    ]
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text("\n".join(kept).rstrip() + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    temporary.replace(path)
+    os.chmod(path, 0o600)
+    return path
+
+
 def env_int(name: str, default: int, *, minimum: int | None = None) -> int:
     raw = os.environ.get(name)
     if raw is None or raw.strip() == "":
@@ -385,11 +463,15 @@ def env_bool(name: str, default: bool = False) -> bool:
     raise MoodtagError(f"{name} must be true or false")
 
 
-def prompt_yes_no(prompt: str, *, default: bool = False) -> bool:
+def prompt_yes_no(
+    prompt: str, *, default: bool = False, printer: Printer | None = None
+) -> bool:
     suffix = "[Y/n]" if default else "[y/N]"
+    printer = printer or Printer()
     while True:
         try:
-            answer = input(f"{prompt} {suffix} ").strip().lower()
+            printer.emit(f"{prompt} {suffix}")
+            answer = input().strip().lower()
         except (EOFError, KeyboardInterrupt) as exc:
             raise MoodtagError("Setup cancelled.") from exc
         if not answer:
@@ -398,7 +480,7 @@ def prompt_yes_no(prompt: str, *, default: bool = False) -> bool:
             return True
         if answer in {"n", "no"}:
             return False
-        print("Please answer y or n.")
+        printer.emit("Enter y or n.", state="warning")
 
 
 def public_attr(name: str) -> Any:
@@ -899,7 +981,7 @@ class VisionClient(CoreVisionClient):
 
 
 class MockVisionClient:
-    def __init__(self, model: str = "mock-vision", profile: str = "default") -> None:
+    def __init__(self, model: str = "mock-vision", profile: str = "editorial") -> None:
         self.model = model
         self.profile = resolve_profile(profile).id
         self.protocol = "mock"
@@ -919,12 +1001,18 @@ class MockVisionClient:
         first_tags = [tags[0] for _, tags in list(taxonomy.items())[:3] if tags]
         result = normalize_analysis_json(
             {
-                "brief": "模拟角色站在简洁背景前，身穿测试服并佩戴基础道具。",
-                "elements": ["模拟角色", "测试服", "基础道具", "简洁背景", "中性配色"],
-                "use": "主要用于 moodboard 自动标注流程参考，也可作为构图和光线描述测试。",
-                "key": "画面信息稳定，便于确认标签和自然语言备注被正确拆分。",
-                "camera": "中景平视构图，standard lens feel，主体居中且空间关系清晰。",
-                "light_color": "soft directional light 为主，neutral tone，整体干净稳定。",
+                "brief": "A test subject stands against a clean backdrop with simple props.",
+                "elements": [
+                    "test subject",
+                    "sample outfit",
+                    "simple props",
+                    "clean backdrop",
+                    "neutral palette",
+                ],
+                "use": "Reference for testing Moodtag tagging, composition, and lighting notes.",
+                "key": "Clear visual information for checking tag and note extraction.",
+                "camera": "Centered medium shot with a standard-lens perspective.",
+                "light_color": "Soft directional light with a neutral color palette.",
                 "tags": first_tags,
                 "use_intents": ["lighting_reference", "pose_reference"],
             },
@@ -953,7 +1041,7 @@ def file_to_data_url(path: Path, mimetype: str) -> str:
     return f"data:{mimetype};base64,{encoded}"
 
 
-def build_prompt(profile: str = "default") -> str:
+def build_prompt(profile: str = "editorial") -> str:
     from moodtag_core.prompts import render_user_prompt
 
     return render_user_prompt(load_profile_taxonomy(profile), profile=profile)
@@ -1021,33 +1109,23 @@ def build_notes_block(result: MoodtagAnalysis) -> str:
 def make_vision_client(args: argparse.Namespace) -> VisionClient | MockVisionClient:
     if getattr(args, "mock_model", False):
         return MockVisionClient(args.model or "mock-vision", profile=args.profile)
-    protocol = str(
-        getattr(args, "protocol", "") or os.environ.get("MOODTAG_PROTOCOL", "")
-    ).strip()
-    model = str(
-        getattr(args, "model", "") or os.environ.get("MOODTAG_MODEL", "")
-    ).strip()
-    base_url = str(
-        getattr(args, "base_url", "") or os.environ.get("MOODTAG_BASE_URL", "")
-    ).strip()
+    model = str(getattr(args, "model", "")).strip()
+    base_url = str(getattr(args, "base_url", "")).strip()
     api_key = os.environ.get("MOODTAG_API_KEY", "").strip()
     missing = [
-        name
-        for name, value in (
-            ("protocol", protocol),
-            ("base URL", base_url),
-            ("model", model),
-        )
-        if not value
+        name for name, value in (("base URL", base_url), ("model", model)) if not value
     ]
     if missing or not api_key:
         details = ", ".join(missing)
         if not api_key:
             details = f"{details}; MOODTAG_API_KEY" if details else "MOODTAG_API_KEY"
         raise MoodtagError(
-            f"Model setup incomplete ({details}). Run `moodtag config setup`; "
-            "set MOODTAG_API_KEY or run `moodtag config auth`."
+            f"Model setup incomplete ({details}). Run `moodtag config model`."
         )
+    try:
+        protocol = protocol_for_model(model)
+    except CoreError as exc:
+        raise MoodtagError(str(exc)) from exc
     return VisionClient(
         protocol=protocol,
         base_url=base_url,
@@ -1063,27 +1141,28 @@ def make_vision_client(args: argparse.Namespace) -> VisionClient | MockVisionCli
 
 def ensure_model_setup(args: argparse.Namespace) -> None:
     complete = bool(
-        getattr(args, "protocol", "")
-        and getattr(args, "base_url", "")
+        getattr(args, "base_url", "")
         and getattr(args, "model", "")
         and os.environ.get("MOODTAG_API_KEY", "").strip()
     )
     if complete:
-        normalize_base_url(args.base_url, args.protocol)
+        try:
+            normalize_base_url(args.base_url, protocol_for_model(args.model))
+        except CoreError as exc:
+            raise MoodtagError(str(exc)) from exc
         return
     if not sys.stdin.isatty():
-        raise MoodtagError(
-            "Model setup incomplete. Run `moodtag config setup` and set MOODTAG_API_KEY."
-        )
-    values = _setup_prompt()
-    print(f"Protocol: {values['protocol']}")
-    print(f"Base URL: {values['base_url']}")
-    print(f"Model: {values['model']}")
-    print("API key: set")
-    if not prompt_yes_no("Save this model configuration?", default=False):
+        raise MoodtagError("Model setup incomplete. Run `moodtag config model`.")
+    values = _setup_prompt(Printer())
+    setup_printer = Printer()
+    setup_printer.emit(f"Service URL: {values['base_url']}")
+    setup_printer.emit(f"Model: {values['model']}")
+    setup_printer.emit("API key: Ready")
+    if not prompt_yes_no(
+        "Save this model configuration?", default=False, printer=setup_printer
+    ):
         raise MoodtagError("Setup cancelled.")
     _persist_setup(values)
-    args.protocol = values["protocol"]
     args.base_url = values["base_url"]
     args.model = values["model"]
     if "MOODTAG_API_KEY" not in os.environ:
@@ -1247,10 +1326,8 @@ def run_tag_analysis(
 
     workers = min(concurrency, len(work_items))
     futures: dict[concurrent.futures.Future[TagItemResult], int] = {}
-    buffered: dict[int, TagItemResult] = {}
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
     next_submit = 0
-    next_yield = 0
 
     def submit_ready() -> None:
         nonlocal next_submit
@@ -1274,19 +1351,14 @@ def run_tag_analysis(
 
     try:
         submit_ready()
-        while next_yield < len(work_items):
-            if next_yield not in buffered:
-                done, _pending = concurrent.futures.wait(
-                    futures,
-                    return_when=concurrent.futures.FIRST_COMPLETED,
-                )
-                for future in done:
-                    work_index = futures.pop(future)
-                    buffered[work_index] = future.result()
-                submit_ready()
-            while next_yield in buffered:
-                yield buffered.pop(next_yield)
-                next_yield += 1
+        while futures:
+            done, _pending = concurrent.futures.wait(
+                futures, return_when=concurrent.futures.FIRST_COMPLETED
+            )
+            for future in done:
+                futures.pop(future)
+                yield future.result()
+            submit_ready()
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 
@@ -1304,15 +1376,15 @@ def command_status(args: argparse.Namespace) -> int:
     board = scope.board
     items = scope.items
     processed = [item for item in items if has_moodboard_notes(item.annotation)]
-    print(f"Board: {board.path} ({board.id})")
-    print_scope_summary(scope)
-    print(f"Items: {len(items)}")
-    print(f"Processed: {len(processed)}")
-    print(f"Pending: {len(items) - len(processed)}")
+    printer = Printer()
+    printer.emit(f"Board: {board.path}")
+    printer.emit(f"Items: {len(items)}")
+    printer.emit(f"Processed: {len(processed)}")
+    printer.emit(f"Pending: {len(items) - len(processed)}")
     if args.verbose:
         for item in items:
             status = "processed" if has_moodboard_notes(item.annotation) else "pending"
-            print(f"{status}\t{item.id}\t{item.name}")
+            printer.emit(f"{status}\t{item.id}\t{item.name}")
     return 0
 
 
@@ -1529,7 +1601,7 @@ def command_export_context(args: argparse.Namespace) -> int:
     )
     if args.output:
         Path(args.output).write_text(markdown, encoding="utf-8")
-        print(f"Wrote {args.output}")
+        Printer().emit(f"Wrote {args.output}", state="success")
     else:
         print(markdown, end="")
     return 0
@@ -1690,6 +1762,10 @@ def record_timing_totals(
 
 
 def command_guided_tag(args: argparse.Namespace) -> int:
+    return _command_guided_tag_v2(args)
+
+
+def _command_guided_tag_legacy(args: argparse.Namespace) -> int:
     validate_tag_args(args)
     if not getattr(args, "mock_model", False):
         ensure_model_setup(args)
@@ -1846,9 +1922,11 @@ def command_guided_tag(args: argparse.Namespace) -> int:
         eagle=eagle,
         vision=vision,
         vision_factory=(
-            lambda: public_attr("make_vision_client")(args)
-            if args.concurrency > 1
-            else None
+            lambda: (
+                public_attr("make_vision_client")(args)
+                if args.concurrency > 1
+                else None
+            )
         ),
         image_root=image_root,
         taxonomy=taxonomy,
@@ -1978,6 +2056,12 @@ def command_guided_tag(args: argparse.Namespace) -> int:
 
 
 def command_tag(args: argparse.Namespace) -> int:
+    if getattr(args, "guided_main_flow", False):
+        return command_guided_tag(args)
+    return _command_tag_v2(args)
+
+
+def _command_tag_legacy(args: argparse.Namespace) -> int:
     validate_tag_args(args)
     if getattr(args, "guided_main_flow", False):
         return command_guided_tag(args)
@@ -2210,9 +2294,11 @@ def command_tag(args: argparse.Namespace) -> int:
         eagle=eagle,
         vision=vision,
         vision_factory=(
-            lambda: public_attr("make_vision_client")(args)
-            if args.concurrency > 1
-            else None
+            lambda: (
+                public_attr("make_vision_client")(args)
+                if args.concurrency > 1
+                else None
+            )
         ),
         image_root=image_root,
         taxonomy=taxonomy,
@@ -2245,6 +2331,284 @@ def command_tag(args: argparse.Namespace) -> int:
     return finish_run()
 
 
+def _emit_final_result(
+    printer: Printer, args: argparse.Namespace, result: RunResult
+) -> int:
+    if getattr(args, "json", False):
+        print(json.dumps(result.as_dict(), ensure_ascii=False, sort_keys=True))
+    elif not getattr(args, "quiet", 0):
+        action = "updated" if getattr(args, "write", False) else "analyzed (dry run)"
+        printer.emit(
+            f"Complete: {result.changed} {action}, {result.skipped} skipped, {result.failed} failed",
+            state="success"
+            if not result.failed and not result.cancelled
+            else "warning",
+            force=True,
+        )
+    elif not result.cancelled:
+        action = "updated" if getattr(args, "write", False) else "analyzed (dry run)"
+        printer.emit(
+            f"Complete: {result.changed} {action}, {result.failed} failed", force=True
+        )
+    return result.exit_code
+
+
+def _command_guided_tag_v2(args: argparse.Namespace) -> int:
+    validate_tag_args(args)
+    printer = Printer(plain=getattr(args, "plain", False))
+    if not getattr(args, "mock_model", False):
+        try:
+            ensure_model_setup(args)
+        except SetupCancelled:
+            printer.emit("Model setup cancelled. Nothing changed.", state="warning")
+            return 0
+    eagle = public_attr("EagleClient")(args.eagle_api)
+    with spinner(printer, "Loading your Eagle board"):
+        eagle.app_info()
+    scope = _load_guided_board_scope(args, eagle, printer)
+    if scope is None:
+        printer.emit("Cancelled. Nothing changed.", state="warning")
+        return 0
+    items = scope.items
+    completed = sum(has_moodboard_notes(item.annotation) for item in items)
+    selected = sum(
+        not has_moodboard_notes(item.annotation) or args.force for item in items
+    )
+    printer.emit(f"Ready to tag \u201c{scope.board.path}\u201d", state="next")
+    printer.emit(
+        f"{len(items)} images total · {selected} to tag · {completed} already tagged"
+    )
+    printer.emit(f"Tagging style: {tagging_style_name(args.profile)} · Model: Ready")
+    printer.emit("Existing tags and notes will be replaced.", state="warning")
+    if not prompt_yes_no(
+        "Start tagging and update Eagle?", default=False, printer=printer
+    ):
+        printer.emit("Cancelled. Nothing changed.", state="warning")
+        return 0
+    if supports_cursor(printer.stream, plain=printer.plain):
+        clear_line(printer.stream)
+        printer.stream.write("\x1b[1A")
+        clear_line(printer.stream)
+        printer.stream.flush()
+    args.guided_main_flow = False
+    args.write = True
+    return _command_tag_v2(args)
+
+
+def _load_guided_board_scope(
+    args: argparse.Namespace, eagle: Any, printer: Printer
+) -> BoardScope | None:
+    """Resolve an interactive board query, letting the user recover from ambiguity."""
+    while True:
+        try:
+            with spinner(printer, "Loading your Eagle board"):
+                return load_board_scope(
+                    eagle,
+                    args.board,
+                    recursive=not args.no_recursive,
+                    max_board_items=args.max_board_items,
+                )
+        except MoodtagError as exc:
+            candidates = find_board_candidates(
+                normalize_board_query(args.board), eagle.boards()
+            )
+            if len(candidates) < 2:
+                raise exc
+        try:
+            selected = choose(
+                printer,
+                "Multiple boards match. Choose one:",
+                [
+                    *[f"{board.path} ({board.id})" for board in candidates],
+                    "Retry board lookup",
+                ],
+                allow_back=True,
+            )
+        except MenuCancelled:
+            return None
+        if selected is None:
+            return None
+        if selected == len(candidates):
+            continue
+        args.board = candidates[selected].id
+
+
+def _command_tag_v2(args: argparse.Namespace) -> int:
+    validate_tag_args(args)
+    printer = Printer(
+        plain=getattr(args, "plain", False) or getattr(args, "json", False),
+        quiet=getattr(args, "quiet", 0),
+    )
+    session = Session(printer)
+    try:
+        with session.wait("Connecting to Eagle and model"):
+            vision = public_attr("make_vision_client")(args)
+            eagle = public_attr("EagleClient")(args.eagle_api)
+            eagle.app_info()
+            scope = load_board_scope(
+                eagle,
+                args.board,
+                recursive=not args.no_recursive,
+                max_board_items=args.max_board_items,
+            )
+    except CoreError as exc:
+        raise MoodtagError(str(exc)) from exc
+
+    items = scope.items
+    if args.limit:
+        pending = [
+            item
+            for item in items
+            if not has_moodboard_notes(item.annotation) or args.force
+        ]
+        processed = [item for item in items if item not in pending]
+        items = pending[: args.limit] + processed
+    total = len(items)
+    work_items: list[tuple[int, EagleItem]] = []
+    skipped = 0
+    for index, item in enumerate(items, 1):
+        if has_moodboard_notes(item.annotation) and not args.force:
+            skipped += 1
+            if not getattr(args, "quiet", 0):
+                printer.emit(f"Skip {item.name}: already tagged", state="warning")
+        elif unsupported_media_reason(item):
+            skipped += 1
+            if not getattr(args, "quiet", 0):
+                printer.emit(
+                    f"Skip {item.name}: unsupported file type", state="warning"
+                )
+        else:
+            work_items.append((index, item))
+    if not getattr(args, "quiet", 0):
+        printer.emit(
+            f"Tagging \u201c{scope.board.path}\u201d: {len(work_items)}/{total} images",
+            state="active",
+        )
+
+    taxonomy = load_profile_taxonomy(args.profile)
+    image_root = eagle_library_images_root(eagle)
+    analyzed: list[TagItemResult] = []
+    failed = 0
+    cancelled = False
+    try:
+        if work_items:
+            probe_index, probe_item = work_items[0]
+            with session.wait("Checking first image"):
+                probe = analyze_tag_item(
+                    index=probe_index,
+                    item=probe_item,
+                    eagle=eagle,
+                    vision=vision,
+                    image_root=image_root,
+                    taxonomy=taxonomy,
+                    image_edge=args.image_edge,
+                    retries=args.retries,
+                    max_tags=args.max_tags,
+                )
+            if probe.error:
+                error = redact(str(probe.error))
+                printer.error(f"Model check failed: {error}")
+                return _emit_final_result(
+                    printer,
+                    args,
+                    RunResult(
+                        scope.board.path,
+                        total,
+                        len(work_items),
+                        0,
+                        skipped,
+                        1,
+                        error=error,
+                    ),
+                )
+            analyzed.append(probe)
+            remainder = work_items[1:]
+            with session.progress(len(remainder), "Analyzing") as progress:
+                for result in run_tag_analysis(
+                    work_items=remainder,
+                    eagle=eagle,
+                    vision=vision,
+                    vision_factory=(lambda: public_attr("make_vision_client")(args))
+                    if args.concurrency > 1
+                    else None,
+                    image_root=image_root,
+                    taxonomy=taxonomy,
+                    image_edge=args.image_edge,
+                    retries=args.retries,
+                    max_tags=args.max_tags,
+                    concurrency=args.concurrency,
+                ):
+                    analyzed.append(result)
+                    outcome = f"{result.item.name}: {'×' if result.error else '✓'}"
+                    progress.update(outcome)
+                    if result.error:
+                        failed += 1
+                    if getattr(args, "verbose", 0) and not getattr(args, "quiet", 0):
+                        printer.emit(
+                            outcome, state="failure" if result.error else "success"
+                        )
+                    if getattr(args, "verbose", 0) >= 2 and not getattr(
+                        args, "quiet", 0
+                    ):
+                        printer.emit(
+                            f"{model_endpoint_record_summary(result.model_endpoint)} "
+                            f"attempts={len(result.attempts)} elapsed_ms={result.elapsed_ms}"
+                        )
+    except KeyboardInterrupt:
+        cancelled = True
+        printer.emit(
+            "Stopping. Unprocessed images will not be updated.", state="warning"
+        )
+
+    changed = 0
+    if not cancelled and args.write:
+        successes = sorted(
+            (result for result in analyzed if result.error is None),
+            key=lambda result: result.index,
+        )
+        with session.progress(len(successes), "Updating Eagle") as progress:
+            try:
+                for result in successes:
+                    try:
+                        eagle.update_item(
+                            result.item.id,
+                            tags=result.tags,
+                            annotation=result.annotation,
+                        )
+                    except KeyboardInterrupt:
+                        cancelled = True
+                        printer.emit(
+                            "Stopping. Some images may already be updated.",
+                            state="warning",
+                        )
+                        break
+                    except Exception as exc:  # noqa: BLE001
+                        failed += 1
+                        progress.update(f"{result.item.name}: ×")
+                        printer.emit(
+                            f"Update failed: {redact(str(exc))}", state="failure"
+                        )
+                    else:
+                        changed += 1
+                        progress.update(f"{result.item.name}: ✓")
+            except KeyboardInterrupt:
+                cancelled = True
+    elif not args.write and not getattr(args, "quiet", 0):
+        printer.emit(
+            "Analysis complete. Eagle was not updated (dry run).", state="warning"
+        )
+    result = RunResult(
+        scope.board.path,
+        total,
+        len(work_items),
+        changed if args.write else len([item for item in analyzed if not item.error]),
+        skipped,
+        failed,
+        cancelled,
+    )
+    return _emit_final_result(printer, args, result)
+
+
 def command_brief(args: argparse.Namespace) -> int:
     validate_board_scope_args(args)
     eagle = public_attr("EagleClient")(args.eagle_api)
@@ -2263,7 +2627,7 @@ def command_brief(args: argparse.Namespace) -> int:
         if output.is_dir():
             output = output / "moodboard-brief.md"
         output.write_text(markdown, encoding="utf-8")
-        print(f"Wrote {output}")
+        Printer().emit(f"Wrote {output}", state="success")
     else:
         print(markdown, end="")
     return 0
@@ -2319,79 +2683,67 @@ def command_reset(args: argparse.Namespace) -> int:
     )
     board = scope.board
     items = scope.items
+    printer = Printer()
     changed = 0
     for item in items:
         if not item.annotation and not item.tags:
             continue
         changed += 1
-        print(f"{'write' if args.write else 'dry-run'}\t{item.id}\t{item.name}")
+        printer.emit(f"{'write' if args.write else 'dry-run'}\t{item.id}\t{item.name}")
         if args.write:
             eagle.update_item(item.id, tags=[], annotation="")
     if not args.write:
-        print("Dry run only. Re-run with --write to clear annotations and tags.")
-    print(f"Board: {board.path} ({board.id})")
-    print_scope_summary(scope)
-    print(f"Reset candidates: {changed}")
-    return 0
-
-
-def command_config_set(args: argparse.Namespace) -> int:
-    current = effective_model_config(load_user_config())
-    supplied = {
-        key: value
-        for key, value in {
-            "protocol": args.protocol,
-            "base_url": args.base_url,
-            "model": args.model,
-        }.items()
-        if value
-    }
-    merged = {**current, **supplied}
-    if args.protocol and args.protocol not in {"chat", "responses"}:
-        raise MoodtagError("--protocol must be chat or responses")
-    protocol = merged["protocol"] or DEFAULT_PROTOCOL
-    if merged["base_url"]:
-        normalized = normalize_base_url(merged["base_url"], protocol)
-        if args.base_url:
-            supplied["base_url"] = normalized
-    values = {
-        **supplied,
-        "eagle_api": args.eagle_api,
-    }
-    values = {key: value for key, value in values.items() if value}
-    if not values:
-        raise MoodtagError("Pass at least one config value to set")
-    path = update_user_config(values)
-    print(f"Wrote {path}")
+        printer.emit("Dry run only. Re-run with --write to clear annotations and tags.")
+    printer.emit(f"Board: {board.path}")
+    printer.emit(f"Reset candidates: {changed}")
     return 0
 
 
 def effective_model_config(config: dict[str, str]) -> dict[str, str]:
-    return {
-        "protocol": config_value(config, "MOODTAG_PROTOCOL", "protocol", ""),
-        "base_url": config_value(config, "MOODTAG_BASE_URL", "base_url", ""),
-        "model": config_value(config, "MOODTAG_MODEL", "model", ""),
-    }
+    base_url = config.get("base_url", "")
+    model = config.get("model", "")
+    protocol = ""
+    if model:
+        try:
+            protocol = protocol_for_model(model)
+        except CoreError:
+            protocol = ""
+    return {"protocol": protocol, "base_url": base_url, "model": model}
 
 
-def _setup_prompt() -> dict[str, str]:
+def _setup_prompt(printer: Printer) -> dict[str, str]:
     try:
-        protocol = input("Protocol [responses]: ").strip().lower() or DEFAULT_PROTOCOL
-        base_url = input("Base URL: ").strip()
-        model = input("Model: ").strip()
-    except (EOFError, KeyboardInterrupt) as exc:
-        raise MoodtagError("Setup cancelled.") from exc
+        protocol_index = choose(
+            printer, "Choose model API", ["Chat Completions", "Responses"]
+        )
+        if protocol_index is None:
+            raise MoodtagError("Setup cancelled.")
+        protocol = ("chat", "responses")[protocol_index]
+        models = models_for_protocol(protocol)
+        model_index = choose(
+            printer,
+            "Choose model",
+            [f"{entry.name} ({entry.id})" for entry in models],
+            allow_back=True,
+        )
+        if model_index is None:
+            raise MoodtagError("Setup cancelled.")
+        model = models[model_index].id
+        printer.emit("Service URL:")
+        base_url = input().strip()
+    except (EOFError, KeyboardInterrupt, MenuCancelled) as exc:
+        raise SetupCancelled("Setup cancelled.") from exc
     if not base_url or not model:
         raise MoodtagError("Setup cancelled.")
     base_url = normalize_base_url(base_url, protocol)
     try:
-        api_key = getpass.getpass("API key: ").strip()
+        printer.emit("API key:")
+        api_key = getpass.getpass("").strip()
     except (EOFError, KeyboardInterrupt) as exc:
         raise MoodtagError("Setup cancelled.") from exc
-    if not api_key:
+    if not api_key and not os.environ.get("MOODTAG_API_KEY", "").strip():
         raise MoodtagError("Setup cancelled.")
     return {
-        "protocol": protocol,
         "base_url": base_url,
         "model": model,
         "api_key": api_key,
@@ -2405,9 +2757,10 @@ def _persist_setup(values: dict[str, str]) -> None:
     old_env = env_file.read_bytes() if env_file.exists() else None
     try:
         config = load_user_config(config_file)
-        config.update({key: values[key] for key in ("protocol", "base_url", "model")})
+        config.update({key: values[key] for key in ("base_url", "model")})
         save_user_config(config, config_file)
-        save_env_values({"MOODTAG_API_KEY": values["api_key"]}, env_file)
+        if values.get("api_key"):
+            save_env_values({"MOODTAG_API_KEY": values["api_key"]}, env_file)
     except Exception:
         if old_config is None:
             with contextlib.suppress(FileNotFoundError):
@@ -2422,56 +2775,66 @@ def _persist_setup(values: dict[str, str]) -> None:
         raise
 
 
-def command_config_setup(args: argparse.Namespace) -> int:
+def command_config_model(args: argparse.Namespace) -> int:
     del args
     if not sys.stdin.isatty():
-        raise MoodtagError(
-            "Interactive setup requires a TTY. Run `moodtag config set` and set MOODTAG_API_KEY."
-        )
-    values = _setup_prompt()
-    print(f"Protocol: {values['protocol']}")
-    print(f"Base URL: {values['base_url']}")
-    print(f"Model: {values['model']}")
-    print("API key: set")
-    if not prompt_yes_no("Save this model configuration?", default=False):
-        print("Cancelled. No changes written.")
+        raise MoodtagError("Interactive model setup requires a TTY.")
+    printer = Printer()
+    try:
+        values = _setup_prompt(printer)
+    except SetupCancelled:
+        printer.emit("Model setup cancelled. Nothing changed.", state="warning")
+        return 0
+    printer.emit(f"API format: {protocol_for_model(values['model'])}")
+    printer.emit(f"Service URL: {values['base_url']}")
+    printer.emit(f"Model: {values['model']}")
+    printer.emit("API key: Ready")
+    if not prompt_yes_no(
+        "Save this model configuration?", default=False, printer=printer
+    ):
+        printer.emit("Model setup cancelled. Nothing changed.", state="warning")
         return 0
     _persist_setup(values)
-    print(f"Wrote {config_path()}")
-    print(f"Wrote {env_file_path()}")
+    printer.emit("Model setup saved.", state="success")
     return 0
 
 
-def command_config_auth(args: argparse.Namespace) -> int:
-    del args
-    if not sys.stdin.isatty():
-        raise MoodtagError(
-            "Interactive auth requires a TTY. Set MOODTAG_API_KEY in the environment."
-        )
+def command_config_profile(args: argparse.Namespace) -> int:
+    profiles = ["editorial", "default"]
+    profile = str(getattr(args, "profile", "") or "").strip()
+    if not profile:
+        if not sys.stdin.isatty():
+            raise MoodtagError("Pass a tagging style name in non-interactive mode.")
+        current = load_user_config().get("profile", DEFAULT_PROFILE) or DEFAULT_PROFILE
+        try:
+            selected = choose(
+                Printer(),
+                f"Choose tagging style (current: {tagging_style_name(current)})",
+                [tagging_style_name(value) for value in profiles],
+            )
+        except MenuCancelled:
+            return 0
+        if selected is None:
+            return 0
+        profile = profiles[selected]
     try:
-        api_key = getpass.getpass("API key: ").strip()
-    except (EOFError, KeyboardInterrupt) as exc:
-        raise MoodtagError("Setup cancelled.") from exc
-    if not api_key:
-        raise MoodtagError("Setup cancelled.")
-    if not prompt_yes_no("Save this API key?", default=False):
-        print("Cancelled. No changes written.")
-        return 0
-    save_env_values({"MOODTAG_API_KEY": api_key})
-    print(f"Wrote {env_file_path()}")
+        profile = resolve_profile(profile).id
+    except CoreError as exc:
+        raise MoodtagError(
+            f"Unknown tagging style: {profile}. "
+            f"Available styles: {', '.join(tagging_style_name(item) for item in profiles)}"
+        ) from exc
+    update_user_config({"profile": profile})
+    Printer().emit(
+        f"Tagging style saved: {tagging_style_name(profile)}", state="success"
+    )
     return 0
 
 
 def command_config_show(args: argparse.Namespace) -> int:
-    config_file = config_path()
-    if not config_file.exists() or config_file.stat().st_size == 0:
-        save_user_config({}, config_file)
     config = load_user_config()
-    save_user_config(config, config_file)
     model_config = effective_model_config(config)
-    eagle_api = config_value(
-        config, "MOODTAG_EAGLE_API", "eagle_api", DEFAULT_EAGLE_API
-    )
+    eagle_api = config.get("eagle_api", DEFAULT_EAGLE_API)
     view = public_config_view(
         config,
         api_key_set=bool(os.environ.get("MOODTAG_API_KEY", "").strip()),
@@ -2487,13 +2850,49 @@ def command_config_show(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(view, ensure_ascii=False, sort_keys=True))
         return 0
-    print(f"Config: {view['config_path']}")
-    print(f"env_file: {view['env_file']}")
-    print(f"protocol: {view['protocol'] or '-'}")
-    print(f"base_url: {view['base_url'] or '-'}")
-    print(f"model: {view['model'] or '-'}")
-    print(f"eagle_api: {view['eagle_api'] or '-'}")
-    print(f"api_key: {view['api_key']}")
+    printer = Printer()
+    printer.emit(
+        "Model configuration: "
+        + (
+            "Ready"
+            if view["base_url"] and view["model"] and view["api_key"] == "set"
+            else "Needs setup"
+        )
+    )
+    printer.emit(f"Tagging style: {tagging_style_name(view['profile'])}")
+    printer.emit(f"API format: {view['protocol'] or '-'}")
+    printer.emit(f"Service URL: {view['base_url'] or '-'}")
+    printer.emit(f"Model: {view['model'] or '-'}")
+    printer.emit(f"API key: {view['api_key_source']}")
+    return 0
+
+
+def command_config_reset(args: argparse.Namespace) -> int:
+    del args
+    if not sys.stdin.isatty():
+        raise MoodtagError("Interactive reset requires a TTY.")
+    printer = Printer()
+    try:
+        selected = choose(
+            printer, "Reset settings", ["Tagging style", "Model setup", "Everything"]
+        )
+    except MenuCancelled:
+        return 0
+    if selected is None:
+        return 0
+    label = ("tagging style", "model setup", "everything")[selected]
+    if not prompt_yes_no(f"Reset {label}?", default=False, printer=printer):
+        return 0
+    values = load_user_config()
+    if selected in {0, 2}:
+        values.pop("profile", None)
+    if selected in {1, 2}:
+        values.pop("base_url", None)
+        values.pop("model", None)
+        remove_env_value("MOODTAG_API_KEY")
+        os.environ.pop("MOODTAG_API_KEY", None)
+    save_user_config(values)
+    printer.emit("Settings reset.", state="success")
     return 0
 
 
@@ -2503,7 +2902,7 @@ def build_parser() -> argparse.ArgumentParser:
         usage=(
             "moodtag <board-url-or-id>\n"
             "       moodtag [--help|help]\n"
-            "       moodtag config [show|set ...]\n"
+            "       moodtag config [profile|model|reset]\n"
             "       moodtag {status,tag,brief,export-context,reset,config} ..."
         ),
         description=(
@@ -2528,9 +2927,7 @@ def build_parser() -> argparse.ArgumentParser:
         )
         p.add_argument(
             "--eagle-api",
-            default=config_value(
-                user_config, "MOODTAG_EAGLE_API", "eagle_api", DEFAULT_EAGLE_API
-            ),
+            default=user_config.get("eagle_api", DEFAULT_EAGLE_API),
         )
         p.add_argument(
             "--max-board-items",
@@ -2560,16 +2957,14 @@ def build_parser() -> argparse.ArgumentParser:
     tag.add_argument("--force", action="store_true", help="Reprocess existing notes")
     tag.add_argument(
         "--profile",
-        default="default",
-        help="Prompt profile to use (default: default)",
+        default=user_config.get("profile", DEFAULT_PROFILE) or DEFAULT_PROFILE,
+        help="Tagging style to use (default: editorial)",
     )
     tag.add_argument(
         "--mock-model", action="store_true", help="Use deterministic mock model"
     )
     tag.set_defaults(
-        protocol=config_value(user_config, "MOODTAG_PROTOCOL", "protocol", ""),
-        base_url=config_value(user_config, "MOODTAG_BASE_URL", "base_url", ""),
-        model=config_value(user_config, "MOODTAG_MODEL", "model", ""),
+        base_url=user_config.get("base_url", ""), model=user_config.get("model", "")
     )
     tag.add_argument(
         "--image-edge",
@@ -2612,6 +3007,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tag.add_argument("--fail-fast", action="store_true")
     tag.add_argument(
+        "--json", action="store_true", help="Write one final JSON result to stdout"
+    )
+    tag.add_argument("--plain", action="store_true", help="Disable color and animation")
+    tag.add_argument("-q", "--quiet", action="count", default=0)
+    tag.add_argument("-v", "--verbose", action="count", default=0)
+    tag.add_argument(
         "--no-response-format",
         action="store_true",
         default=env_bool("MOODTAG_NO_RESPONSE_FORMAT", DEFAULT_NO_RESPONSE_FORMAT),
@@ -2653,25 +3054,16 @@ def build_parser() -> argparse.ArgumentParser:
     reset.add_argument("--write", action="store_true")
     reset.set_defaults(func=command_reset)
 
-    config = sub.add_parser(
-        "config", help="Manage non-secret moodtag defaults and setup"
-    )
+    config = sub.add_parser("config", help="View or change Moodtag configuration")
     config_sub = config.add_subparsers(dest="config_command", required=True)
-    config_set = config_sub.add_parser("set", help="Set non-secret user defaults")
-    config_set.add_argument("--protocol", default="")
-    config_set.add_argument("--base-url", default="")
-    config_set.add_argument("--model", default="")
-    config_set.add_argument("--eagle-api", default="")
-    config_set.set_defaults(func=command_config_set)
-    config_setup = config_sub.add_parser(
-        "setup", help="Interactively configure one model endpoint"
-    )
-    config_setup.set_defaults(func=command_config_setup)
-    config_auth = config_sub.add_parser(
-        "auth", help="Interactively replace MOODTAG_API_KEY"
-    )
-    config_auth.set_defaults(func=command_config_auth)
-    config_show = config_sub.add_parser("show", help="Show non-secret user defaults")
+    config_profile = config_sub.add_parser("profile", help="Select persisted profile")
+    config_profile.add_argument("profile", nargs="?")
+    config_profile.set_defaults(func=command_config_profile)
+    config_model = config_sub.add_parser("model", help="Configure model service")
+    config_model.set_defaults(func=command_config_model)
+    config_reset = config_sub.add_parser("reset", help="Safely reset configuration")
+    config_reset.set_defaults(func=command_config_reset)
+    config_show = config_sub.add_parser("show", help="Show configuration")
     config_show.add_argument("--json", action="store_true")
     config_show.set_defaults(func=command_config_show)
     return parser
@@ -2685,13 +3077,67 @@ def rewrite_main_argv(argv: list[str]) -> tuple[list[str], bool]:
         return ["config", "show", *argv[1:]], False
     if first.startswith("-") or first in MAIN_FLOW_COMMANDS:
         return argv, False
-    return ["tag", "--board", first, "--guided-main-flow", *argv[1:]], True
+    if is_board_candidate(first):
+        return ["tag", "--board", first, "--guided-main-flow", *argv[1:]], True
+    return argv, False
+
+
+def is_board_candidate(value: str) -> bool:
+    candidate = str(value or "").strip()
+    if not candidate or candidate.startswith("-") or candidate in MAIN_FLOW_COMMANDS:
+        return False
+    if re.fullmatch(r"[A-Za-z0-9_-]{6,}", candidate):
+        return True
+    if candidate.startswith(("eagle://", "http://", "https://", "/", "~")):
+        return True
+    return bool(re.fullmatch(r"[^\x00\r\n]+", candidate))
+
+
+def command_home() -> int:
+    printer = Printer()
+    config = load_user_config()
+    ready = bool(
+        config.get("base_url")
+        and config.get("model")
+        and os.environ.get("MOODTAG_API_KEY", "").strip()
+    )
+    printer.emit("Moodtag", state="success")
+    printer.emit(f"Model: {'Ready' if ready else 'Needs setup'}")
+    current_style = config.get("profile", DEFAULT_PROFILE) or DEFAULT_PROFILE
+    printer.emit(f"Tagging style (current: {tagging_style_name(current_style)})")
+    try:
+        selected = choose(
+            printer,
+            "What would you like to do?",
+            ["Tag a board", "Choose tagging style", "Model setup"],
+        )
+    except MenuCancelled:
+        return 0
+    if selected == 0:
+        printer.emit("Paste an Eagle board URL, ID, name, or path", state="next")
+        try:
+            printer.emit(">")
+            board = input().strip()
+        except (EOFError, KeyboardInterrupt):
+            return 0
+        return main([board]) if board else 0
+    if selected == 1:
+        command_config_profile(argparse.Namespace(profile=""))
+    else:
+        command_config_model(argparse.Namespace())
+    return command_home()
 
 
 def main(argv: list[str] | None = None) -> int:
     try:
         load_env_defaults()
         argv = list(sys.argv[1:] if argv is None else argv)
+        if not argv:
+            if sys.stdin.isatty() and sys.stdout.isatty():
+                return command_home()
+            raise MoodtagError(
+                "No board supplied. Use `moodtag <board-url-or-id>` or run from an interactive terminal."
+            )
         for value in argv:
             if value == "--api-key" or value.startswith("--api-key="):
                 raise MoodtagError(
@@ -2710,6 +3156,12 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"error: {redact(str(exc))}", file=sys.stderr)
         return 2
+    except CoreError as exc:
+        print(f"error: {redact(str(exc))}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        print("× Stopped. Some images may already be updated.", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":

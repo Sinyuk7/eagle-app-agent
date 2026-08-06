@@ -83,7 +83,7 @@ class ProviderAuthenticationError(ProviderHTTPError):
         host = urllib.parse.urlsplit(endpoint.base_url).netloc or endpoint.base_url
         self.args = (
             f"Model authentication failed for {endpoint.protocol} endpoint ({host}) "
-            f"using MOODTAG_API_KEY (HTTP {error.status}). Update `moodtag config auth`.",
+            f"using configured API key (HTTP {error.status}). Update `moodtag config model`.",
         )
 
 
@@ -125,7 +125,7 @@ def normalize_base_url(base_url: str, protocol: str) -> str:
     protocol = validate_protocol(protocol)
     value = str(base_url or "").strip().rstrip("/")
     if not value:
-        raise CoreError("Missing model base URL. Run `moodtag config setup`.")
+        raise CoreError("Missing model base URL. Run `moodtag config model`.")
     parts = urllib.parse.urlsplit(value)
     if parts.scheme not in {"http", "https"} or not parts.netloc:
         raise CoreError("Model base URL must be an absolute http(s) URL")
@@ -232,7 +232,7 @@ class VisionClient:
         temperature: float = DEFAULT_TEMPERATURE,
         top_p: float = DEFAULT_TOP_P,
         max_tokens: int = DEFAULT_MAX_TOKENS,
-        profile: str = "default",
+        profile: str = "editorial",
     ) -> None:
         self.protocol = validate_protocol(protocol)
         self.base_url = normalize_base_url(base_url, self.protocol)
@@ -315,9 +315,9 @@ class VisionClient:
         self.last_attempts = []
         endpoint = self.endpoint()
         if not endpoint.api_key:
-            raise CoreError("Missing MOODTAG_API_KEY. Run `moodtag config auth`.")
+            raise CoreError("Missing API key. Run `moodtag config model`.")
         if not endpoint.model:
-            raise CoreError("Missing model. Run `moodtag config setup`.")
+            raise CoreError("Missing model. Run `moodtag config model`.")
         last_error: Exception | None = None
         for attempt in range(retries + 1):
             started = time.monotonic()

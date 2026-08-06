@@ -6,7 +6,9 @@ from dataclasses import dataclass, field
 
 SUPPORTED_PROTOCOLS = ("chat", "responses")
 DEFAULT_PROTOCOL = "responses"
-DEFAULT_TEMPERATURE = 0.6  ## 你的任务不是 OCR，也不是严格分类，而是“创作素材理解”。因此适度的创造性是有益的。0.6 是一个不错的起点，可以根据实际效果进行微调。
+# Moodtag favors visual interpretation over strict classification; 0.6 keeps output useful
+# without making it overly inventive.
+DEFAULT_TEMPERATURE = 0.6
 QUALITY_TOP_P = 0.85
 DEFAULT_TOP_P = QUALITY_TOP_P
 DEFAULT_TOP_K = 20

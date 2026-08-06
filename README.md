@@ -25,7 +25,7 @@ MQBUH98ILYTQ0
 - 将 endpoint 配置保存到 JSON，将 key 保存到 `~/.config/moodtag/.env`
 - 用 `y/N` 明确确认后，才开始真正写回 Eagle
 
-模型 endpoint、protocol、model 和 API key 均需由用户配置；不会注入默认供应商或默认模型。
+运行 `moodtag config model` 选择 catalog 模型和服务 URL；API key 仅保存于 owner-only `.env`。
 
 必要支持面：
 
@@ -39,7 +39,7 @@ moodtag config
 API key 是否已就绪。
 
 这是下一版本的全新配置格式。旧的 provider/fallback 字段不参与运行；删除旧配置后，
-使用 `moodtag config setup` 重新填写完整 endpoint。
+使用 `moodtag config model` 重新配置 AI 服务。
 
 ## 2. 安装（Mac Apple Silicon）
 
@@ -82,10 +82,8 @@ API Key 不写入 `moodtag config` 的 JSON 文件。可使用环境变量、
 ```sh
 export MOODTAG_API_KEY='你的模型 API Key'
 
-moodtag config set --protocol responses \
-  --base-url https://your-model-service.example/v1 \
-  --model your-vision-model
-moodtag config auth
+moodtag config model
+moodtag config profile editorial
 
 moodtag config
 ```
@@ -164,11 +162,11 @@ moodtag tag --board 'MQBUH98ILYTQ0' --max-board-items 500 --write
 
 只处理当前文件夹、不包含子文件夹时加 `--no-recursive`。
 
-`moodtag tag` 会输出当前 protocol/model/host，并默认写入 JSONL 运行日志。日志默认位于 `~/.cache/moodtag/runs`，保留最近 50 个 `moodtag-*.jsonl` 文件；日志不记录 API key、请求 header、请求 body 或图片 data URL。
+`moodtag tag` 将人类 UI、进度和错误写到 stderr；`--json` 只在 stdout 写最终 JSON。`-q` 仅输出摘要和错误，`-v` 增加项目结果，`-vv` 增加安全的 endpoint/retry/timing 诊断；不会输出 API key、headers、prompt、图片或原始响应。
 
 开始并发前，`moodtag` 会先串行验证一张可处理图片。若模型 endpoint 返回 `401` 或 `403`，会立即停止本次运行；按提示更新 `MOODTAG_API_KEY` 后再重试。网络错误、429 和 5xx 只重试同一个 endpoint，不会切换服务。视频等非图片素材会显示为 `skip`，不会记为失败。
 
-默认发送给模型的预览图长边是 `768px`。需要更高细节时可以传 `--image-edge 1024`。
+默认流程固定发送最长边为 `768px` 的预览图。
 
 只处理一小批图片：
 

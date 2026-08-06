@@ -10,7 +10,7 @@ from .contract import USE_INTENT_TAGS, CoreError
 TAXONOMY_PACKAGE = "moodtag_core.resources.taxonomy"
 
 
-def load_profile_taxonomy(profile: str = "default") -> dict[str, list[str]]:
+def load_profile_taxonomy(profile: str = "editorial") -> dict[str, list[str]]:
     """Load bundled taxonomy selected by the prompt profile."""
     from .prompts import resolve_profile
 
@@ -77,6 +77,10 @@ def validate_unique_tags(taxonomy: dict[str, list[str]]) -> None:
             if previous is not None and previous != group:
                 raise CoreError(
                     f"Taxonomy tag {tag!r} appears in both {previous!r} and {group!r}"
+                )
+            if previous == group:
+                raise CoreError(
+                    f"Taxonomy tag {tag!r} appears more than once in {group!r}"
                 )
             groups_by_tag[key] = group
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 CONFIG_ENV = "MOODTAG_CONFIG"
-CONFIG_KEYS = ("protocol", "base_url", "model", "eagle_api")
+CONFIG_KEYS = ("base_url", "model", "profile", "eagle_api")
 
 
 class ConfigError(RuntimeError):
@@ -81,9 +81,12 @@ def public_config_view(
 ) -> dict[str, Any]:
     return {
         "config_path": str(config_path()),
-        "protocol": config.get("protocol", ""),
         "base_url": config.get("base_url", ""),
         "model": config.get("model", ""),
+        "profile": config.get("profile", "editorial") or "editorial",
         "eagle_api": config.get("eagle_api", ""),
         "api_key": "set" if api_key_set else "unset",
+        "api_key_source": os.environ.get("_MOODTAG_API_KEY_SOURCE", "unset")
+        if api_key_set
+        else "unset",
     }

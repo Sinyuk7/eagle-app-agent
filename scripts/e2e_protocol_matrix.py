@@ -44,6 +44,13 @@ PROFILES = (
         api_key_env="MOODTAG_E2E_RESPONSES_API_KEY",
     ),
     LiveProfile(
+        name="responses-gpt-5.6-terra",
+        protocol="responses",
+        base_url="https://sub2.de5.net",
+        model="gpt-5.6-terra",
+        api_key_env="MOODTAG_E2E_RESPONSES_API_KEY",
+    ),
+    LiveProfile(
         name="chat-qwen3.5-122b-a10b",
         protocol="chat",
         base_url="https://llm-api.net/v1",
@@ -72,6 +79,9 @@ def parse_args() -> argparse.Namespace:
         default="all",
     )
     parser.add_argument("--first-limit", type=int, default=2)
+    parser.add_argument(
+        "--profile", choices=("default", "editorial"), default="editorial"
+    )
     parser.add_argument("--min-items", type=int, default=1)
     parser.add_argument("--max-items", type=int, default=20)
     parser.add_argument(
@@ -113,8 +123,6 @@ def profile_command(profile: LiveProfile, args: argparse.Namespace) -> list[str]
         str(ROOT / "scripts" / "e2e_live_batch.py"),
         "--board",
         args.board,
-        "--protocol",
-        profile.protocol,
         "--base-url",
         profile.base_url,
         "--model",
@@ -125,6 +133,8 @@ def profile_command(profile: LiveProfile, args: argparse.Namespace) -> list[str]
         str(args.min_items),
         "--max-items",
         str(args.max_items),
+        "--profile",
+        args.profile,
         "--reset-first",
         "--report-dir",
         str(Path(args.report_dir) / profile.name),

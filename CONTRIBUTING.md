@@ -51,13 +51,10 @@ environment variables or a local ignored `.env` for API keys.
 End-user happy path is now `moodtag <board-url-or-id>`. Maintainers should keep
 that guided flow short: resolve board, show summary, confirm, then write.
 
-Store non-secret defaults with `moodtag config set`:
+Configure the catalog-backed model service with `moodtag config model`:
 
 ```sh
-moodtag config set --protocol responses \
-  --base-url https://your-model-service.example/v1 \
-  --model your-vision-model
-moodtag config auth
+moodtag config model
 ```
 
 Keep API keys in the environment or in a local `.env` file:
@@ -79,18 +76,14 @@ moodtag config
 Configuration precedence is inherited shell environment > user
 `~/.config/moodtag/.env` > current-directory `.env` > JSON config. The model
 tuple has no built-in endpoint/model default. `moodtag config show` prints the
-effective protocol, endpoint, model, `env_file` path, and key readiness without
-printing secrets. Use `moodtag config setup` for the complete interactive tuple
-or `moodtag config set` for non-secret updates.
+derived protocol, endpoint, model, `env_file` path, and key readiness without
+printing secrets. Use `moodtag config model` for interactive setup.
 
 ## Settings
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `MOODTAG_EAGLE_API` | `http://localhost:41595` | Eagle desktop Web API URL. |
-| `MOODTAG_PROTOCOL` | empty | `chat` or `responses`; no vendor default. |
-| `MOODTAG_BASE_URL` | empty | Single OpenAI-compatible model endpoint base URL. |
-| `MOODTAG_MODEL` | empty | Single vision model name. |
 | `MOODTAG_API_KEY` | empty | Single model API key. |
 | `MOODTAG_IMAGE_EDGE` | `768` | Preview image long edge sent to the model. |
 | `MOODTAG_CONCURRENCY` | `4` | Number of image analysis requests to run in parallel. |

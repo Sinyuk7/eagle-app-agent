@@ -26,7 +26,7 @@
 
 ### 1. Workflow-first home screen
 
-无参数且 stdin/stdout 均为 TTY 时进入状态首页。首页先显示欢迎语、`AI 已配置/需要配置`、当前 profile，再显示 `开始打标签`、`更换 Profile`、`配置 AI`、退出。它不是 command reference；数字只是可靠的键盘输入。默认不显示 provider、endpoint、模型 ID 或日志路径。
+无参数且 stdin/stdout 均为 TTY 时进入状态首页。首页先显示欢迎语、`Model: Ready/Needs setup`、`Tagging style (current: Editorial)`，再显示 `Tag a board`、`Choose tagging style`、`Model setup`、退出。它不是 command reference；数字只是可靠的键盘输入。默认不显示 provider、endpoint、模型 ID 或日志路径。未保存 profile 时使用 `editorial`。
 
 bare board URL、ID、名称或路径候选仍直接进入 tagging workflow；显式高级命令继续使用 argparse。非 TTY 无参数运行不读取 stdin，输出可执行提示并失败。
 
@@ -130,4 +130,4 @@ UI 可按需回退为旧线性输出；废弃 provider 配置不在 beta 支持�
 
 - `config reset` 的“Profile / AI / 全部”选择是否应支持命令行非交互选择，还是只提供安全交互选择？
 - `--json` 是否在成功时包含每项完整 tags/annotation，还是只包含摘要与失败项目？
-- 是否在后续 release 加入 `MOODTAG_LANG`，还是先固定中文 UI？
+- CLI 固定使用英文 UI；模型生成内容的语言不由 CLI locale 控制。

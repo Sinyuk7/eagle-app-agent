@@ -1,0 +1,38 @@
+"""Small terminal capability helpers."""
+
+from __future__ import annotations
+
+import os
+import shutil
+from typing import TextIO
+
+
+def is_tty(stream: TextIO) -> bool:
+    return bool(getattr(stream, "isatty", lambda: False)())
+
+
+def plain_output(stream: TextIO, *, plain: bool = False) -> bool:
+    return (
+        plain
+        or not is_tty(stream)
+        or bool(os.environ.get("NO_COLOR"))
+        or os.environ.get("TERM") == "dumb"
+    )
+
+
+def supports_cursor(stream: TextIO, *, plain: bool = False) -> bool:
+    return not plain_output(stream, plain=plain)
+
+
+def terminal_width(stream: TextIO) -> int:
+    del stream
+    return shutil.get_terminal_size(fallback=(80, 24)).columns
+
+
+def clear_line(stream: TextIO) -> None:
+    stream.write("\r\x1b[2K")
+
+
+def move_cursor_up(stream: TextIO, lines: int = 1) -> None:
+    if lines > 0:
+        stream.write(f"\x1b[{lines}A")

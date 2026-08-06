@@ -36,8 +36,8 @@ class CommercialEditorialTests(unittest.TestCase):
     }
 
     def test_default_and_editorial_profiles_use_different_json_contracts(self):
-        default_prompt = render_user_prompt(self.taxonomy)
-        editorial_prompt = render_user_prompt(self.taxonomy, profile="editorial")
+        default_prompt = render_user_prompt(self.taxonomy, profile="default")
+        editorial_prompt = render_user_prompt(self.taxonomy)
 
         self.assertNotIn('"visible_text"', default_prompt)
         self.assertNotIn('"commercial_format_confidence"', default_prompt)
@@ -123,6 +123,10 @@ class CommercialEditorialTests(unittest.TestCase):
                 {"genre": ["editorial"], "commercial_format": ["editorial"]}
             )
 
+    def test_taxonomy_rejects_duplicate_tag_within_facet(self):
+        with self.assertRaisesRegex(CoreError, "appears more than once"):
+            validate_unique_tags({"genre": ["editorial", "editorial"]})
+
     def test_profiles_own_separate_bundled_taxonomies(self):
         default_taxonomy = load_profile_taxonomy("default")
         editorial_taxonomy = load_profile_taxonomy("editorial")
@@ -142,8 +146,8 @@ class CommercialEditorialTests(unittest.TestCase):
         self.assertNotIn("reels", editorial_taxonomy["commercial_format"])
 
     def test_editorial_prompt_renders_only_editorial_taxonomy(self):
-        default_prompt = moodtag.build_prompt()
-        editorial_prompt = moodtag.build_prompt(profile="editorial")
+        default_prompt = moodtag.build_prompt(profile="default")
+        editorial_prompt = moodtag.build_prompt()
 
         self.assertNotIn("commercial_format:", default_prompt)
         self.assertIn("commercial_format: campaign", editorial_prompt)
@@ -153,6 +157,12 @@ class CommercialEditorialTests(unittest.TestCase):
             "commercial_format supports multiple compatible tags", editorial_prompt
         )
         self.assertIn("Facet cardinality is evidence-driven", editorial_prompt)
+
+    def test_output_protocol_is_kept_in_system_prompt_only(self):
+        for profile in ("default", "editorial"):
+            prompt = render_user_prompt(self.taxonomy, profile=profile)
+            self.assertNotIn("Output rules:", prompt)
+            self.assertNotIn("Output MUST be raw JSON only.", prompt)
 
 
 if __name__ == "__main__":

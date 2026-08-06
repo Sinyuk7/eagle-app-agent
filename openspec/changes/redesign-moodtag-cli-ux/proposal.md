@@ -17,7 +17,7 @@
 - 定义 stdout/stderr 契约：UI、进度、日志和错误写 stderr；结构化 `--json` 结果只写 stdout。
 - 定义 `-q`、默认、`-v`、`-vv` 输出等级；详细 endpoint、模型、HTTP、prompt 和 timing 只在允许的等级出现，敏感值永不输出。
 - 在分析和写回期间支持可恢复的 Ctrl-C 取消，并准确报告已经完成、跳过、失败和未处理数量。
-- 默认输出采用简洁中文用户文案；详细内部信息移入 `--verbose` / `--debug`，错误与机器输出分离。
+- 默认输出采用简洁英文用户文案；详细内部信息移入 `--verbose` / `--debug`，错误与机器输出分离。
 - 保留现有高级 `status`、`tag`、`brief`、`export-context`、`reset` 命令，不改变其自动化用途。
 
 ## Capabilities

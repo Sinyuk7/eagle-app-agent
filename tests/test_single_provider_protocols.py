@@ -252,11 +252,11 @@ class SingleProviderProtocolTests(unittest.TestCase):
             "custom-secret", redact("provider said custom-secret", "custom-secret")
         )
 
-    def test_setup_rolls_back_when_credential_write_fails(self):
+    def test_model_config_rolls_back_when_credential_write_fails(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "config.json"
             config.write_text(
-                '{"protocol":"chat","base_url":"https://old/v1","model":"old"}\n',
+                '{"base_url":"https://old/v1","model":"gpt-5.6-luna"}\n',
                 encoding="utf-8",
             )
             with (
@@ -270,14 +270,14 @@ class SingleProviderProtocolTests(unittest.TestCase):
                 with self.assertRaises(OSError):
                     cli._persist_setup(
                         {
-                            "protocol": "responses",
                             "base_url": "https://new/v1",
-                            "model": "new",
+                            "model": "gpt-5.6-terra",
                             "api_key": "custom-secret",
                         }
                     )
             self.assertIn(
-                '"protocol":"chat"', config.read_text(encoding="utf-8").replace(" ", "")
+                '"model":"gpt-5.6-luna"',
+                config.read_text(encoding="utf-8").replace(" ", ""),
             )
 
 

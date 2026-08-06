@@ -27,7 +27,6 @@ Language rules:
 - Facet cardinality is evidence-driven, not exclusive: multiple tags are allowed in every facet when they describe distinct supported dimensions. For example, `photo` + `studio photo`, `fashion photo` + `editorial photo`, or `campaign` + `social content` + `video keyframe` may coexist. Avoid near-synonym stuffing, unsupported metadata guesses, and redundant tags; the global `max_tags` limit remains the final cap.
 - Pipeline tags may be selected directly in tags. Use `reference` for broadly reusable visual material, `training data` for clear, consistently readable visual material without claiming rights, `final select` only for a visually polished candidate rather than an actual project approval, and `test shot` for visible test or setup imagery. Select other pipeline tags only when supported by the image.
 - Prefer direct observation language. Avoid filler such as "图中可见", "此图可作为", "展示了", "营造出", "极具", "通过", "结合", "强调" unless truly necessary.
-- Do not include tags, suggested tags, or use intent ids in brief/elements/use/key/camera/light_color.
 - Do not invent tags.
 - If a tag is uncertain, omit it.
 - All natural-language fields must be non-empty strings. elements must contain 1-10 unique entries. visible_text, brand_evidence, and product_categories may be empty arrays; do not add filler values.
@@ -39,10 +38,3 @@ Allowed taxonomy:
 
 Allowed use intents:
 {{use_intents}}
-
-Output rules:
-- Output MUST be raw JSON only.
-- Do NOT wrap in markdown or code blocks.
-- Response must start with { and end with }.
-- No text before or after JSON.
-- Close every array and close the final JSON object.

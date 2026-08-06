@@ -7,40 +7,30 @@ This document fixes the visible workflow before implementation. The UI is state-
 ```text
 Moodtag
 
-欢迎回来。
+Model: Ready
+Tagging style (current: Editorial)
 
-AI 已配置
-当前 Profile：Editorial
-
-────────────────────────
-
-① 开始打标签
-② 更换 Profile
-③ 配置 AI
-q 退出
+→ What would you like to do?
+1. Tag a board
+2. Choose tagging style
+3. Model setup
+q. Quit
 ```
 
 - Hide provider, endpoint, model ID, log path, and advanced flags.
 - `①` opens board input. `②` returns to Home after persistence. `③` returns to Home after confirmed save or cancellation.
-- Missing model setup changes only the readiness line to `AI 需要配置`; starting tagging routes to configuration before model probing.
+- Missing model setup changes only the readiness line to `Model: Needs setup`; starting tagging routes to configuration before model probing.
 
 ## Tagging Confirmation
 
 ```text
-Moodtag
+Ready to tag "Portrait / Spring"
 
-将分析：
+42 images total · 36 to tag · 6 already tagged
+Tagging style: Editorial · Model: Ready
+! Existing tags and notes will be replaced.
 
-✓ 人像 / 春季
-
-42 张图片
-36 张需要分析
-6 张已经完成
-
-使用 Editorial Profile
-AI 已配置
-
-开始？[y/N]
+Start tagging and update Eagle? [y/N]
 ```
 
 - Describe the action, not the system internals.
@@ -50,7 +40,7 @@ AI 已配置
 ## Preparation
 
 ```text
-… 准备中
+… Connecting to Eagle and model
 ```
 
 - yaspin represents short unknown-duration waits.
@@ -60,14 +50,14 @@ AI 已配置
 ## Analysis
 
 ```text
-正在分析
+Analyzing
 
 █████████───────────  12 / 36
 
-最近完成：
+Recent:
 ✓ IMG001
 ✓ IMG002
-! IMG003 已跳过
+! IMG003 skipped
 ```
 
 - alive-progress owns the active terminal region, including ETA and FPS when width permits.
@@ -77,7 +67,7 @@ AI 已配置
 ## Write
 
 ```text
-正在写入
+Updating Eagle
 
 ████████████────────  21 / 34
 ```
@@ -88,13 +78,13 @@ AI 已配置
 ## Complete
 
 ```text
-完成
+Complete
 
-✓ 已完成 34
-! 已跳过 6
-× 失败 2
+✓ 34 updated
+! 6 skipped
+× 2 failed
 
-→ 使用 -v 查看图片结果
+→ Use -v for image results
 ```
 
 ## Detail and Pipe Modes

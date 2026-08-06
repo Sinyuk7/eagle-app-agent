@@ -30,7 +30,7 @@ import moodtag  # noqa: E402
 TEST_FOLDER = "__moodtag_e2e__"
 ITEM_PREFIX = "moodtag-e2e-"
 E2E_API_KEY = "sk-e2eLocalStubForMoodtagOnly123456"
-E2E_MODEL = "e2e-vision"
+E2E_MODEL = "qwen3.5-122b-a10b"
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mP8"
     "z8BQDwAFgwJ/lK3Q2wAAAABJRU5ErkJggg=="
@@ -442,21 +442,30 @@ class E2E:
             {
                 "MOODTAG_EAGLE_API": self.eagle_api,
                 "MOODTAG_API_KEY": E2E_API_KEY,
-                "MOODTAG_MODEL": E2E_MODEL,
                 "MOODTAG_RETRIES": "0",
             }
         )
-        if vision_base_url:
-            env["MOODTAG_BASE_URL"] = vision_base_url
-        started = time.monotonic()
-        proc = subprocess.run(
-            [self.python, "-m", "moodtag", *args],
-            cwd=ROOT,
-            env=env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "config.json"
+            config.write_text(
+                json.dumps(
+                    {
+                        "base_url": vision_base_url or "http://127.0.0.1",
+                        "model": E2E_MODEL,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env["MOODTAG_CONFIG"] = str(config)
+            started = time.monotonic()
+            proc = subprocess.run(
+                [self.python, "-m", "moodtag", *args],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
         return CommandResult(
             args=args,
             returncode=proc.returncode,

@@ -26,7 +26,9 @@ classifiers = [
   "Topic :: Utilities",
 ]
 dependencies = [
+  "alive-progress>=3.2",
   "Pillow>=10.0",
+  "yaspin>=3.0",
 ]
 
 [project.urls]
@@ -52,6 +54,7 @@ include = ["moodtag*", "moodtag_core*", "moodboard*", "moodboard_core*"]
 [tool.setuptools.package-data]
 "moodtag_core.resources.prompts" = ["*.txt"]
 "moodtag_core.resources.taxonomy" = ["*.json"]
+"moodtag_core.resources.models" = ["*.json"]
 "moodboard_core.resources.templates" = ["*.html"]
 "moodboard_core.resources.specs" = ["*.md"]
 

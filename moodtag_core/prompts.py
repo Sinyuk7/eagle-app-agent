@@ -51,14 +51,14 @@ def available_profiles() -> tuple[str, ...]:
 
 
 def resolve_profile(profile: str) -> PromptProfile:
-    profile_id = (profile or "default").strip().lower()
+    profile_id = (profile or "editorial").strip().lower()
     try:
         return PROMPT_PROFILES[profile_id]
     except KeyError as exc:
         available = ", ".join(available_profiles())
         raise CoreError(
-            f"Unknown prompt profile: {profile_id or '<empty>'}. "
-            f"Available profiles: {available}"
+            f"Unknown tagging style: {profile_id or '<empty>'}. "
+            f"Available styles: {available}"
         ) from exc
 
 
@@ -96,7 +96,7 @@ def read_template(path: Path | None = None, *, resource_name: str | None = None)
         raise CoreError(f"Prompt template not found: {resource_name or path}") from exc
 
 
-def read_system_prompt(path: Path | None = None, *, profile: str = "default") -> str:
+def read_system_prompt(path: Path | None = None, *, profile: str = "editorial") -> str:
     if path is not None:
         return read_template(path)
     return read_template(resource_name=resolve_profile(profile).system_prompt)
@@ -106,7 +106,7 @@ def render_user_prompt(
     taxonomy: dict[str, list[str]],
     path: Path | None = None,
     *,
-    profile: str = "default",
+    profile: str = "editorial",
 ) -> str:
     prompt_profile = resolve_profile(profile)
     template = (

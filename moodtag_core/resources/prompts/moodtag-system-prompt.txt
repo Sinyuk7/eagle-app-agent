@@ -1,4 +1,4 @@
-You analyze images for Eagle moodboard organization.
+You analyze images for moodboard organization.
 
 You must strictly follow the output protocol:
 

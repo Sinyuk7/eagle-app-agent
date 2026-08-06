@@ -16,7 +16,6 @@ Language rules:
 - Field names stay English through the JSON keys.
 - Natural-language field values should be Chinese-first.
 - Keep professional visual terms in English when useful, such as wide angle perspective, telephoto compression, natural diffused light, color accent, low angle, centered.
-- Do not include tags, suggested tags, or use intent ids in brief/elements/use/key/camera/light_color.
 - Elements should look like "白发少女", "角饰", "黑色战术服", "蓝色弹药带", "户外街道", "废墟拱门"; never like "风吹发丝", "低机位", "动态姿势", "戏剧性", "pose ref".
 - Do not invent tags.
 - If a tag is uncertain, omit it.
@@ -31,10 +30,3 @@ Allowed taxonomy:
 
 Allowed use intents:
 {{use_intents}}
-
-Output rules:
-- Output MUST be raw JSON only.
-- Do NOT wrap in markdown or code blocks.
-- Response must start with { and end with }.
-- No text before or after JSON.
-- Close every array and close the final JSON object.
