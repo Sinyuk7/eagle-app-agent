@@ -25,7 +25,6 @@ from collections import deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +60,7 @@ from moodtag_core.provider import (
     VisionClient as CoreVisionClient,
 )
 from moodtag_core.response import normalize_analysis_json, parse_analysis_response
+from moodtag_core.taxonomy import load_profile_taxonomy
 
 from .config import (
     ConfigError,
@@ -77,10 +77,8 @@ DEFAULT_CONCURRENCY = 4
 DEFAULT_MAX_TAGS = 15
 DEFAULT_RETRIES = 2
 DEFAULT_USER_AGENT = "moodtag/0.1"
-DEFAULT_TAXONOMY = "default"
 DEFAULT_LOG_KEEP = 50
 DEFAULT_MAX_BOARD_ITEMS = 100
-LEGACY_DEFAULT_TAXONOMY_PATHS = {"taxonomy/default.json", "./taxonomy/default.json"}
 MAIN_FLOW_COMMANDS = {"status", "tag", "brief", "export-context", "reset", "config"}
 SUPPORTED_ORIGINAL_EXTS = {
     ".jpg",
@@ -793,47 +791,6 @@ def extract_notes_summary(annotation: str) -> str:
     return extract_brief(annotation)
 
 
-def default_taxonomy_text() -> str:
-    return (
-        resources.files("moodtag_core.resources.taxonomy")
-        .joinpath("default.json")
-        .read_text(encoding="utf-8")
-    )
-
-
-def is_default_taxonomy_path(path: Path | str | None) -> bool:
-    if path in {None, "", DEFAULT_TAXONOMY}:
-        return True
-    raw = str(path).replace("\\", "/")
-    if raw == DEFAULT_TAXONOMY:
-        return True
-    return raw in LEGACY_DEFAULT_TAXONOMY_PATHS and not Path(path).exists()
-
-
-def load_taxonomy(path: Path | str | None = DEFAULT_TAXONOMY) -> dict[str, list[str]]:
-    try:
-        if is_default_taxonomy_path(path):
-            data = json.loads(default_taxonomy_text())
-        else:
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise MoodtagError(f"Taxonomy file not found: {path}") from exc
-    except json.JSONDecodeError as exc:
-        raise MoodtagError(f"Invalid taxonomy JSON: {path}: {exc}") from exc
-    if not isinstance(data, dict):
-        raise MoodtagError("Taxonomy must be a JSON object")
-    taxonomy: dict[str, list[str]] = {}
-    for group, tags in data.items():
-        if not isinstance(tags, list):
-            continue
-        clean = [str(tag).strip() for tag in tags if str(tag).strip()]
-        if clean:
-            taxonomy[str(group)] = clean
-    if not taxonomy:
-        raise MoodtagError("Taxonomy has no usable tags")
-    return taxonomy
-
-
 def flatten_taxonomy(taxonomy: dict[str, list[str]]) -> dict[str, str]:
     allowed: dict[str, str] = {}
     for tags in taxonomy.values():
@@ -1031,10 +988,10 @@ def file_to_data_url(path: Path, mimetype: str) -> str:
     return f"data:{mimetype};base64,{encoded}"
 
 
-def build_prompt(taxonomy: dict[str, list[str]], profile: str = "default") -> str:
+def build_prompt(profile: str = "default") -> str:
     from moodtag_core.prompts import render_user_prompt
 
-    return render_user_prompt(taxonomy, profile=profile)
+    return render_user_prompt(load_profile_taxonomy(profile), profile=profile)
 
 
 def extract_chat_content_json(data: Any) -> dict[str, Any]:
@@ -1048,7 +1005,7 @@ def normalize_vl_result(
     taxonomy: dict[str, list[str]] | None = None,
     max_tags: int = DEFAULT_MAX_TAGS,
 ) -> MoodtagAnalysis:
-    taxonomy = taxonomy or load_taxonomy()
+    taxonomy = taxonomy or load_profile_taxonomy()
     try:
         if isinstance(data, str):
             return parse_analysis_response(
@@ -1724,7 +1681,7 @@ def command_guided_tag(args: argparse.Namespace) -> int:
         return 0
 
     vision = public_attr("make_vision_client")(args)
-    taxonomy = load_taxonomy(Path(args.taxonomy))
+    taxonomy = load_profile_taxonomy(args.profile)
     run_log = make_tag_run_log()
     print(f"Log: {run_log.path}")
     print(f"Provider plan: {format_provider_plan(vision)}")
@@ -1960,7 +1917,7 @@ def command_tag(args: argparse.Namespace) -> int:
     )
     board = scope.board
     items = scope.items
-    taxonomy = load_taxonomy(Path(args.taxonomy))
+    taxonomy = load_profile_taxonomy(args.profile)
     run_log = make_tag_run_log()
     print(f"Log: {run_log.path}")
     print(f"Provider plan: {format_provider_plan(vision)}")
@@ -2444,10 +2401,6 @@ def build_parser() -> argparse.ArgumentParser:
             "fallback_model",
             DEFAULT_FALLBACK_MODEL,
         ),
-    )
-    tag.add_argument(
-        "--taxonomy",
-        default=os.environ.get("MOODTAG_TAXONOMY", DEFAULT_TAXONOMY),
     )
     tag.add_argument(
         "--image-edge",

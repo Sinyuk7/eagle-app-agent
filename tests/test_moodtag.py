@@ -39,7 +39,7 @@ from moodtag_core.provider import (
     ProviderHTTPError,
 )
 from moodtag_core.response import normalize_analysis_json
-from moodtag_core.taxonomy import render_taxonomy_for_prompt
+from moodtag_core.taxonomy import load_profile_taxonomy, render_taxonomy_for_prompt
 from scripts import export_moodboard_context
 
 PNG_1X1 = (
@@ -506,7 +506,6 @@ class MoodtagTests(unittest.TestCase):
             "MOODTAG_FALLBACK_BASE_URL": "https://fallback.example.test/v1",
             "MOODTAG_MODEL": "vision-model",
             "MOODTAG_FALLBACK_MODEL": "fallback-vision-model",
-            "MOODTAG_TAXONOMY": "custom-taxonomy.json",
             "MOODTAG_IMAGE_EDGE": "512",
             "MOODTAG_MAX_TAGS": "7",
             "MOODTAG_RETRIES": "1",
@@ -523,7 +522,7 @@ class MoodtagTests(unittest.TestCase):
         self.assertEqual(args.fallback_base_url, "https://fallback.example.test/v1")
         self.assertEqual(args.model, "vision-model")
         self.assertEqual(args.fallback_model, "fallback-vision-model")
-        self.assertEqual(args.taxonomy, "custom-taxonomy.json")
+        self.assertFalse(hasattr(args, "taxonomy"))
         self.assertEqual(args.image_edge, 512)
         self.assertEqual(args.max_tags, 7)
         self.assertEqual(args.retries, 1)
@@ -686,7 +685,7 @@ class MoodtagTests(unittest.TestCase):
         self.assertEqual(args.base_url, "https://env.example/v1")
         self.assertEqual(args.model, "env-model")
 
-    def test_legacy_default_taxonomy_env_uses_bundled_resource(self):
+    def test_taxonomy_env_is_ignored_and_cli_has_no_taxonomy_override(self):
         with mock.patch.dict(
             os.environ,
             {"MOODTAG_TAXONOMY": "taxonomy/default.json"},
@@ -694,8 +693,9 @@ class MoodtagTests(unittest.TestCase):
         ):
             parser = moodtag.build_parser()
             args = parser.parse_args(["tag", "--board", "Board", "--mock-vl"])
-            taxonomy = moodtag.load_taxonomy(args.taxonomy)
-        self.assertIn("medium", taxonomy)
+        self.assertFalse(hasattr(args, "taxonomy"))
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["tag", "--board", "Board", "--taxonomy", "bad.json"])
 
     def test_parser_defaults_match_reference_provider_contract(self):
         isolated_config = Path(self._log_tmp.name) / "config.json"
@@ -819,7 +819,7 @@ class MoodtagTests(unittest.TestCase):
         self.assertIn("JSON", system_prompt)
         self.assertIn("JSON", user_prompt)
         self.assertIn(
-            '{"brief":"","elements":[],"use":"","key":"","camera":"","light_color":"","tags":[],"use_intents":[]',
+            '{"brief":"","elements":[],"use":"","key":"","camera":"","light_color":"","visible_text":[],"brand_evidence":[]',
             user_prompt,
         )
         self.assertIn("subject-verb-object", user_prompt)
@@ -827,6 +827,9 @@ class MoodtagTests(unittest.TestCase):
         self.assertIn("Do NOT include action/state, camera/framing", user_prompt)
         self.assertIn("medium: photo | concept art", user_prompt)
         self.assertIn("lighting_reference -> lighting ref", user_prompt)
+        self.assertIn("Array of 1-10", user_prompt)
+        self.assertIn("tags and use_intents may be empty arrays", user_prompt)
+        self.assertIn("Pipeline tags may be selected directly", user_prompt)
         self.assertNotIn('{\n  "medium"', user_prompt)
 
     def test_prompt_profiles_keep_default_stable_and_render_editorial(self):
@@ -1534,7 +1537,7 @@ class MoodtagTests(unittest.TestCase):
         )
         self.assertEqual(user_content[1]["type"], "text")
         self.assertIn(
-            '"brief":"","elements":[],"use":"","key":"","camera":"","light_color":"","tags":[],"use_intents":[]',
+            '"brief":"","elements":[],"use":"","key":"","camera":"","light_color":"","visible_text":[],"brand_evidence":[]',
             user_content[1]["text"],
         )
         self.assertIn("medium: photo", user_content[1]["text"])
@@ -1554,7 +1557,7 @@ class MoodtagTests(unittest.TestCase):
         self.assertIn("JSON", payload["messages"][0]["content"])
         self.assertIn("JSON", payload["messages"][1]["content"][1]["text"])
 
-    def test_vision_payload_uses_editorial_profile_with_shared_taxonomy(self):
+    def test_vision_payload_uses_editorial_profile_taxonomy(self):
         with tempfile.TemporaryDirectory() as tmp:
             image = Path(tmp) / "image.png"
             write_png(image)
@@ -1564,7 +1567,7 @@ class MoodtagTests(unittest.TestCase):
                 api_key="sk-testSecretForPayload123456",
                 profile="editorial",
             )
-            payload = client.build_payload(image, {"medium": ["photo"]})
+            payload = client.build_payload(image, load_profile_taxonomy("editorial"))
 
         self.assertEqual(client.profile, "editorial")
         self.assertIn(
@@ -1572,7 +1575,8 @@ class MoodtagTests(unittest.TestCase):
         )
         user_text = payload["messages"][1]["content"][1]["text"]
         self.assertIn("brand evidence", user_text)
-        self.assertIn("medium: photo", user_text)
+        self.assertIn("commercial_format: campaign", user_text)
+        self.assertNotIn("game splash art", user_text)
 
     def test_export_context_subcommand_prints_markdown(self):
         fake, tmp = make_fake_eagle(processed_first=True)

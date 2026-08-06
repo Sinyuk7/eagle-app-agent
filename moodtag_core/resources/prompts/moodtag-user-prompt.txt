@@ -4,11 +4,15 @@ Analyze this moodboard image and output ONLY valid JSON using this exact templat
 
 Field definitions:
 - brief: One concise Chinese subject-verb-object sentence describing visible image content. Start with the main subject, then action/pose/state, then scene or key props when visible. It answers "图里是什么". Do not write abstract evaluation such as "视觉冲击力", "独特氛围", "充满动感", or "核心价值".
-- elements: Array of 5-10 visible, relatively static, searchable Chinese noun phrases. Include only character appearance, clothing, props, scene objects, and concrete visual symbols. Do NOT include action/state, camera/framing, composition, lighting, mood, style labels, or use-intent words.
+- elements: Array of 1-10 visible, relatively static, searchable Chinese noun phrases. Include only character appearance, clothing, props, scene objects, and concrete visual symbols. Do NOT include action/state, camera/framing, composition, lighting, mood, style labels, or use-intent words. Prefer fewer entries to guessed filler.
 - use: One natural Chinese sentence explaining how this image should be used later. Prefer "主要用于……参考，也可作为……参考。"
-- key: Chinese natural language describing the strongest visual hook and why the image is worth saving.
+- key: Chinese natural language describing the strongest visible visual hook and why it is worth saving. Start from observation, then state its reference value. Avoid generic praise.
 - camera: Chinese natural language with key professional terms in English. Describe shot size, angle, lens feel, perspective, framing, subject distance, and scale when visible.
 - light_color: Chinese natural language with key professional terms in English. Describe lighting and color as one creative system.
+- visible_text: Array of 0-10 exact readable words, wordmarks, or short phrases visible in pixels. Preserve spelling and case when legible; empty array when none.
+- brand_evidence: Array of 0-10 concise Chinese evidence phrases for a readable brand name, logo, wordmark, or product mark and its visible location. Empty array when no clear evidence. Never infer a brand.
+- product_categories: Array of 0-10 visible generic product-category noun phrases. Empty array when no clear product category.
+- commercial_format_confidence: Exact value "confirmed", "probable", or "not_assessed". Use "not_assessed" when image gives no reliable commercial-format evidence.
 - tags: Array of exact tags selected only from the allowed taxonomy.
 - use_intents: Array of exact internal use intent ids selected only from the left side of the allowed use intents list.
 
@@ -20,6 +24,9 @@ Language rules:
 - Elements should look like "白发少女", "角饰", "黑色战术服", "蓝色弹药带", "户外街道", "废墟拱门"; never like "风吹发丝", "低机位", "动态姿势", "戏剧性", "pose ref".
 - Do not invent tags.
 - If a tag is uncertain, omit it.
+- tags and use_intents may be empty arrays when no supported selection exists.
+- All natural-language fields must be non-empty strings. For low-information images, describe the available visible fact directly instead of leaving a field blank.
+- Pipeline tags may be selected directly in tags. Use `reference` for broadly reusable visual material, `training data` for clear, consistently readable visual material without claiming rights, `final select` only for a visually polished candidate rather than an actual project approval, and `test shot` for visible test or setup imagery. Select other pipeline tags only when supported by the image.
 - Do not output pipeline tag names inside use_intents. For example, output "pose_reference", not "pose ref"; output "aigc_prompt_reference", not "prompt ref".
 - Do not repeat any tag or use_intent.
 

@@ -6,8 +6,14 @@ import json
 import re
 from typing import Any
 
-from .contract import ANNOTATION_FIELDS, CoreError, MoodtagAnalysis
-from .taxonomy import reconcile_tags, reconcile_use_intents
+from .contract import (
+    ANNOTATION_FIELDS,
+    COMMERCIAL_CONFIDENCE_VALUES,
+    COMMERCIAL_LIST_FIELDS,
+    CoreError,
+    MoodtagAnalysis,
+)
+from .taxonomy import group_tags, reconcile_tags, reconcile_use_intents
 
 MARKDOWN_FENCE_RE = re.compile(r"```(?:[a-zA-Z0-9_-]+)?\s*([\s\S]*?)\s*```")
 
@@ -78,6 +84,14 @@ def normalize_analysis_json(
     if not elements:
         raise CoreError("VL result missing required field: elements")
 
+    commercial_lists = {
+        field: normalize_optional_list(data.get(field, []), field=field, maximum=10)
+        for field in COMMERCIAL_LIST_FIELDS
+    }
+    commercial_format_confidence = normalize_commercial_confidence(
+        data.get("commercial_format_confidence", "not_assessed")
+    )
+
     raw_tags = data.get("tags", [])
     if not isinstance(raw_tags, list):
         raise CoreError("VL result field tags must be an array")
@@ -102,7 +116,12 @@ def normalize_analysis_json(
         key=fields["key"],
         camera=fields["camera"],
         light_color=fields["light_color"],
+        visible_text=commercial_lists["visible_text"],
+        brand_evidence=commercial_lists["brand_evidence"],
+        product_categories=commercial_lists["product_categories"],
+        commercial_format_confidence=commercial_format_confidence,
         tags=tags,
+        tag_groups=group_tags(tags, taxonomy),
         use_intents=use_intents,
         rejected_tags=rejected_tags,
         rejected_use_intents=rejected_use_intents,
@@ -131,6 +150,34 @@ def normalize_elements(values: list[Any]) -> list[str]:
         if len(elements) >= 10:
             break
     return elements
+
+
+def normalize_optional_list(values: Any, *, field: str, maximum: int) -> list[str]:
+    if not isinstance(values, list):
+        raise CoreError(f"VL result field {field} must be an array")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        clean = collapse_lines(str(value)).strip().strip("。；;")
+        if not clean or clean.lower() in seen:
+            continue
+        normalized.append(clean)
+        seen.add(clean.lower())
+        if len(normalized) >= maximum:
+            break
+    return normalized
+
+
+def normalize_commercial_confidence(value: Any) -> str:
+    if not isinstance(value, str):
+        raise CoreError("VL result field commercial_format_confidence must be a string")
+    confidence = value.strip().lower() or "not_assessed"
+    if confidence not in COMMERCIAL_CONFIDENCE_VALUES:
+        allowed = ", ".join(COMMERCIAL_CONFIDENCE_VALUES)
+        raise CoreError(
+            f"VL result field commercial_format_confidence must be one of: {allowed}"
+        )
+    return confidence
 
 
 def collapse_lines(value: str) -> str:
