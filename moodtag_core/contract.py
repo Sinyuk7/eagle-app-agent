@@ -47,14 +47,16 @@ ANNOTATION_LABELS = {
     "product_categories": "ProductCategories",
     "commercial_format_confidence": "CommercialFormatConfidence",
 }
-COMMERCIAL_JSON_TEMPLATE = (
+DEFAULT_JSON_TEMPLATE = (
+    '{"brief":"","elements":[],"use":"","key":"","camera":"",'
+    '"light_color":"","tags":[],"use_intents":[]}'
+)
+EDITORIAL_JSON_TEMPLATE = (
     '{"brief":"","elements":[],"use":"","key":"","camera":"",'
     '"light_color":"","visible_text":[],"brand_evidence":[],'
     '"product_categories":[],"commercial_format_confidence":"not_assessed",'
     '"tags":[],"use_intents":[]}'
 )
-DEFAULT_JSON_TEMPLATE = COMMERCIAL_JSON_TEMPLATE
-EDITORIAL_JSON_TEMPLATE = COMMERCIAL_JSON_TEMPLATE
 JSON_TEMPLATE = DEFAULT_JSON_TEMPLATE
 
 USE_INTENT_TAGS = {

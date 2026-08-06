@@ -35,25 +35,18 @@
   "commercial_format": [
     "campaign",
     "lookbook",
-    "e-commerce",
     "catalog",
+    "e-commerce",
     "product detail",
     "social content",
-    "key visual",
-    "video keyframe",
-    "tvc",
-    "reels"
+    "video keyframe"
   ],
   "channel": [
-    "print",
-    "web",
-    "marketplace",
     "social media",
-    "ooh",
-    "retail",
-    "presentation"
+    "ooh"
   ],
   "visual_role": [
+    "key visual",
     "hero image",
     "product focus",
     "outfit showcase",
@@ -83,7 +76,8 @@
     "jewelry",
     "watch",
     "eyewear",
-    "beauty product",
+    "fashion accessories",
+    "makeup",
     "fragrance",
     "skincare",
     "haircare",

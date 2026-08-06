@@ -9,10 +9,6 @@ Field definitions:
 - key: Chinese natural language describing the strongest visible visual hook and why it is worth saving. Start from observation, then state its reference value. Avoid generic praise.
 - camera: Chinese natural language with key professional terms in English. Describe shot size, angle, lens feel, perspective, framing, subject distance, and scale when visible.
 - light_color: Chinese natural language with key professional terms in English. Describe lighting and color as one creative system.
-- visible_text: Array of 0-10 exact readable words, wordmarks, or short phrases visible in pixels. Preserve spelling and case when legible; empty array when none.
-- brand_evidence: Array of 0-10 concise Chinese evidence phrases for a readable brand name, logo, wordmark, or product mark and its visible location. Empty array when no clear evidence. Never infer a brand.
-- product_categories: Array of 0-10 visible generic product-category noun phrases. Empty array when no clear product category.
-- commercial_format_confidence: Exact value "confirmed", "probable", or "not_assessed". Use "not_assessed" when image gives no reliable commercial-format evidence.
 - tags: Array of exact tags selected only from the allowed taxonomy.
 - use_intents: Array of exact internal use intent ids selected only from the left side of the allowed use intents list.
 

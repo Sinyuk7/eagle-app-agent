@@ -35,12 +35,12 @@ class CommercialEditorialTests(unittest.TestCase):
         "pipeline": ["lighting ref"],
     }
 
-    def test_default_and_editorial_profiles_share_commercial_json_contract(self):
+    def test_default_and_editorial_profiles_use_different_json_contracts(self):
         default_prompt = render_user_prompt(self.taxonomy)
         editorial_prompt = render_user_prompt(self.taxonomy, profile="editorial")
 
-        self.assertIn('"visible_text"', default_prompt)
-        self.assertIn('"commercial_format_confidence"', default_prompt)
+        self.assertNotIn('"visible_text"', default_prompt)
+        self.assertNotIn('"commercial_format_confidence"', default_prompt)
         self.assertIn('"visible_text"', editorial_prompt)
         self.assertIn('"brand_evidence"', editorial_prompt)
         self.assertIn('"product_categories"', editorial_prompt)
@@ -132,11 +132,14 @@ class CommercialEditorialTests(unittest.TestCase):
         self.assertNotIn("commercial_format", default_taxonomy)
         self.assertNotIn("channel", default_taxonomy)
         self.assertIn("campaign", editorial_taxonomy["commercial_format"])
-        self.assertIn("ooh", editorial_taxonomy["channel"])
+        self.assertIn("social content", editorial_taxonomy["commercial_format"])
+        self.assertNotIn("key visual", editorial_taxonomy["commercial_format"])
+        self.assertEqual(editorial_taxonomy["channel"], ["social media", "ooh"])
+        self.assertIn("key visual", editorial_taxonomy["visual_role"])
         self.assertIn("hero image", editorial_taxonomy["visual_role"])
         self.assertIn("copy space", editorial_taxonomy["layout_intent"])
-        self.assertIn("tvc", editorial_taxonomy["commercial_format"])
-        self.assertIn("reels", editorial_taxonomy["commercial_format"])
+        self.assertNotIn("tvc", editorial_taxonomy["commercial_format"])
+        self.assertNotIn("reels", editorial_taxonomy["commercial_format"])
 
     def test_editorial_prompt_renders_only_editorial_taxonomy(self):
         default_prompt = moodtag.build_prompt()
@@ -144,10 +147,12 @@ class CommercialEditorialTests(unittest.TestCase):
 
         self.assertNotIn("commercial_format:", default_prompt)
         self.assertIn("commercial_format: campaign", editorial_prompt)
-        self.assertIn(
-            "channel: print | web | marketplace | social media | ooh", editorial_prompt
-        )
+        self.assertIn("channel: social media | ooh", editorial_prompt)
         self.assertIn("Pipeline tags may be selected directly", editorial_prompt)
+        self.assertIn(
+            "commercial_format supports multiple compatible tags", editorial_prompt
+        )
+        self.assertIn("Facet cardinality is evidence-driven", editorial_prompt)
 
 
 if __name__ == "__main__":

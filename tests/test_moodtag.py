@@ -819,7 +819,7 @@ class MoodtagTests(unittest.TestCase):
         self.assertIn("JSON", system_prompt)
         self.assertIn("JSON", user_prompt)
         self.assertIn(
-            '{"brief":"","elements":[],"use":"","key":"","camera":"","light_color":"","visible_text":[],"brand_evidence":[]',
+            '{"brief":"","elements":[],"use":"","key":"","camera":"","light_color":"","tags":[],"use_intents":[]',
             user_prompt,
         )
         self.assertIn("subject-verb-object", user_prompt)
@@ -1537,7 +1537,7 @@ class MoodtagTests(unittest.TestCase):
         )
         self.assertEqual(user_content[1]["type"], "text")
         self.assertIn(
-            '"brief":"","elements":[],"use":"","key":"","camera":"","light_color":"","visible_text":[],"brand_evidence":[]',
+            '"brief":"","elements":[],"use":"","key":"","camera":"","light_color":"","tags":[],"use_intents":[]',
             user_content[1]["text"],
         )
         self.assertIn("medium: photo", user_content[1]["text"])

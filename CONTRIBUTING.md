@@ -367,10 +367,10 @@ Camera: ...
 LightColor: ...
 ```
 
-Both profiles can write evidence metadata when it is present: `VisibleText`,
-`BrandEvidence`, `ProductCategories`, and `CommercialFormatConfidence`.
-`editorial` adds commercial-specific selection guidance and taxonomy; `default`
-keeps the general-purpose taxonomy. Existing six-field annotations remain valid.
+The `editorial` profile can additionally write evidence metadata when present:
+`VisibleText`, `BrandEvidence`, `ProductCategories`, and
+`CommercialFormatConfidence`. The default profile keeps the six-field contract.
+Existing six-field annotations remain valid.
 
 `tags` and `use_intents` are written only as Eagle tags, not into annotation
 text. `Elements` is a semicolon-separated visible-object field for full-text
