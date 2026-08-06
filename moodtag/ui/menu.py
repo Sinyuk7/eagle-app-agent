@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from .printer import Printer
 
@@ -11,18 +12,40 @@ class MenuCancelled(Exception):
     pass
 
 
+@dataclass(frozen=True)
+class MenuChoice:
+    label: str
+    section: str | None = None
+    primary: bool = False
+
+
 def choose(
-    printer: Printer, title: str, choices: Sequence[str], *, allow_back: bool = False
+    printer: Printer,
+    title: str,
+    choices: Sequence[str | MenuChoice],
+    *,
+    allow_back: bool = False,
 ) -> int | None:
+    normalized = [
+        choice if isinstance(choice, MenuChoice) else MenuChoice(choice)
+        for choice in choices
+    ]
     printer.emit(title, state="next")
-    for index, choice in enumerate(choices, start=1):
-        printer.emit(f"{index}. {choice}")
+    section = None
+    for index, choice in enumerate(normalized, start=1):
+        if choice.section and choice.section != section:
+            if index > 1:
+                printer.emit("")
+            printer.emit(choice.section, tone="secondary")
+            section = choice.section
+        key_tone = "accent" if choice.primary else "primary"
+        printer.emit_parts([(f"{index}  ", key_tone), (choice.label, "primary")])
     if allow_back:
-        printer.emit("b. Back")
-    printer.emit("q. Quit")
+        printer.emit_parts([("b  ", "secondary"), ("Back", "secondary")])
+    printer.emit_parts([("q  ", "subtle"), ("Quit", "subtle")])
     while True:
         try:
-            printer.emit(">")
+            printer.emit(">", tone="accent")
             answer = input().strip().lower()
         except (EOFError, KeyboardInterrupt) as exc:
             raise MenuCancelled from exc
@@ -30,6 +53,6 @@ def choose(
             raise MenuCancelled
         if allow_back and answer == "b":
             return None
-        if answer.isdigit() and 1 <= int(answer) <= len(choices):
+        if answer.isdigit() and 1 <= int(answer) <= len(normalized):
             return int(answer) - 1
         printer.emit("Enter a valid option.", state="warning")

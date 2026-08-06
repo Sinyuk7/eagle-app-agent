@@ -70,8 +70,8 @@ from .config import (
     save_user_config,
     update_user_config,
 )
-from .ui.ansi import clear_line, supports_cursor
-from .ui.menu import MenuCancelled, choose
+from .ui.ansi import clear_previous_lines, supports_cursor
+from .ui.menu import MenuCancelled, MenuChoice, choose
 from .ui.printer import Printer
 from .ui.session import Session
 from .ui.spinner import spinner
@@ -2338,13 +2338,17 @@ def _emit_final_result(
         print(json.dumps(result.as_dict(), ensure_ascii=False, sort_keys=True))
     elif not getattr(args, "quiet", 0):
         action = "updated" if getattr(args, "write", False) else "analyzed (dry run)"
-        printer.emit(
-            f"Complete: {result.changed} {action}, {result.skipped} skipped, {result.failed} failed",
-            state="success"
-            if not result.failed and not result.cancelled
-            else "warning",
-            force=True,
-        )
+        if result.cancelled:
+            printer.emit("Cancelled", state="warning", force=True)
+        else:
+            printer.emit("Complete", tone="primary", force=True)
+        printer.emit("")
+        printer.emit(f"{result.changed} {action}", state="success", force=True)
+        printer.emit(f"{result.skipped} skipped", state="warning", force=True)
+        printer.emit(f"{result.failed} failed", state="failure", force=True)
+        if not result.cancelled:
+            printer.emit("")
+            printer.emit("Use -v for image results", state="next", force=True)
     elif not result.cancelled:
         action = "updated" if getattr(args, "write", False) else "analyzed (dry run)"
         printer.emit(
@@ -2378,7 +2382,14 @@ def _command_guided_tag_v2(args: argparse.Namespace) -> int:
     printer.emit(
         f"{len(items)} images total · {selected} to tag · {completed} already tagged"
     )
-    printer.emit(f"Tagging style: {tagging_style_name(args.profile)} · Model: Ready")
+    printer.emit_parts(
+        [
+            ("Tagging style: ", "secondary"),
+            (tagging_style_name(args.profile), "primary"),
+            (" · Model: ", "secondary"),
+            ("Ready", "success"),
+        ]
+    )
     printer.emit("Existing tags and notes will be replaced.", state="warning")
     if not prompt_yes_no(
         "Start tagging and update Eagle?", default=False, printer=printer
@@ -2386,9 +2397,8 @@ def _command_guided_tag_v2(args: argparse.Namespace) -> int:
         printer.emit("Cancelled. Nothing changed.", state="warning")
         return 0
     if supports_cursor(printer.stream, plain=printer.plain):
-        clear_line(printer.stream)
-        printer.stream.write("\x1b[1A")
-        clear_line(printer.stream)
+        # Input leaves a blank line after the five-line confirmation region.
+        clear_previous_lines(printer.stream, 6)
         printer.stream.flush()
     args.guided_main_flow = False
     args.write = True
@@ -2521,9 +2531,10 @@ def _command_tag_v2(args: argparse.Namespace) -> int:
                         error=error,
                     ),
                 )
-            analyzed.append(probe)
             remainder = work_items[1:]
-            with session.progress(len(remainder), "Analyzing") as progress:
+            analyzed.append(probe)
+            with session.progress(len(work_items), "Analyzing") as progress:
+                progress.update(f"{probe.item.name}: ✓")
                 for result in run_tag_analysis(
                     work_items=remainder,
                     eagle=eagle,
@@ -3101,22 +3112,38 @@ def command_home() -> int:
         and config.get("model")
         and os.environ.get("MOODTAG_API_KEY", "").strip()
     )
-    printer.emit("Moodtag", state="success")
-    printer.emit(f"Model: {'Ready' if ready else 'Needs setup'}")
+    printer.emit("Moodtag", tone="brand")
+    printer.emit("")
+    printer.emit_parts(
+        [
+            ("Model: ", "secondary"),
+            ("Ready", "success") if ready else ("! Needs setup", "warning"),
+        ]
+    )
     current_style = config.get("profile", DEFAULT_PROFILE) or DEFAULT_PROFILE
-    printer.emit(f"Tagging style (current: {tagging_style_name(current_style)})")
+    printer.emit_parts(
+        [
+            ("Tagging style: ", "secondary"),
+            (tagging_style_name(current_style), "primary"),
+        ]
+    )
+    printer.emit("")
     try:
         selected = choose(
             printer,
-            "What would you like to do?",
-            ["Tag a board", "Choose tagging style", "Model setup"],
+            "Choose an action",
+            [
+                MenuChoice("Tag a board", primary=True),
+                MenuChoice("Change tagging style", section="Settings"),
+                MenuChoice("Model setup"),
+            ],
         )
     except MenuCancelled:
         return 0
     if selected == 0:
         printer.emit("Paste an Eagle board URL, ID, name, or path", state="next")
         try:
-            printer.emit(">")
+            printer.emit(">", tone="accent")
             board = input().strip()
         except (EOFError, KeyboardInterrupt):
             return 0

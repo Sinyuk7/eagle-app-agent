@@ -39,6 +39,36 @@ scripts/release_check.sh
 
 它会清理旧产物、构建 wheel/sdist、运行 `twine check` 和 wheel CLI smoke。当前快速本地构建也可用 `uv build`。
 
+---
+
+macOS 安装包由 [build_installer.sh](/Users/sinyuk/Documents/github/eagle-app-agent/packaging/macos/build_installer.sh) 构建：
+
+```sh
+OUTPUT_DIR="$PWD/dist/macos" packaging/macos/build_installer.sh
+```
+
+流程：
+
+1. PyInstaller 将 `moodtag` 冻结为 arm64 单文件可执行程序。
+2. `pkgbuild` 打成 `.pkg`，安装到：
+   - `/usr/local/libexec/moodtag/moodtag`
+   - `/usr/local/bin/moodtag` 软链接
+3. `hdiutil` 将 `.pkg` 和 README 打成 `.dmg`。
+
+产物：
+
+```text
+dist/macos/Moodtag-0.1.5-macos-arm64.pkg
+dist/macos/Moodtag-0.1.5-macos-arm64.dmg
+```
+
+完整发布检查可运行：
+
+```sh
+scripts/release_check.sh
+```
+
+在 Apple Silicon macOS 上，它会自动调用 installer 构建和 smoke check。
 
 ## Development Setup
 

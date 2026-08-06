@@ -307,7 +307,9 @@ class MoodtagCliTests(unittest.TestCase):
             self.assertEqual(moodtag.main([]), 0)
         output = stderr.getvalue()
         self.assertIn("Model: Ready", output)
-        self.assertIn("Tagging style (current: Editorial)", output)
+        self.assertIn("Tagging style: Editorial", output)
+        self.assertIn("Settings", output)
+        self.assertIn("1  Tag a board", output)
         self.assertNotIn("gpt-5.6-luna", output)
         self.assertNotIn("example.test", output)
 
@@ -324,8 +326,8 @@ class MoodtagCliTests(unittest.TestCase):
         ):
             self.assertEqual(moodtag.main([]), 0)
         output = stderr.getvalue()
-        self.assertIn("Model: Needs setup", output)
-        self.assertIn("Tagging style (current: Editorial)", output)
+        self.assertIn("Model: ! Needs setup", output)
+        self.assertIn("Tagging style: Editorial", output)
 
     def test_bare_board_routes_to_guided_tag_and_commands_stay_argparse(self):
         captured = {}

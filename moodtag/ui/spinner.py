@@ -14,7 +14,7 @@ def spinner(printer: Printer, text: str):
         try:
             from yaspin import yaspin
 
-            spin = yaspin(text=text, stream=printer.stream)
+            spin = yaspin(text=text, color="cyan", stream=printer.stream)
             spin.start()
         except ImportError:
             spin = None
