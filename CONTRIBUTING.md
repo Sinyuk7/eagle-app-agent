@@ -11,7 +11,7 @@ The package name is `eagle-app-agent`; the installed command is `moodtag`.
 |---|---|
 | `moodtag/` | CLI entry point, Eagle API integration, config handling, command behavior. |
 | `moodtag_core/` | Shared prompt, response, annotation, provider, taxonomy, and contract logic. |
-| `moodtag_core/resources/` | Bundled prompts and default taxonomy. |
+| `moodtag_core/resources/` | Bundled prompts and profile taxonomies. |
 | `moodboard/` | `moodboard` CLI entry point. |
 | `moodboard_core/` | Moodboard HTML generation, validation, and bundled templates. |
 | `scripts/` | Real Eagle E2E and support scripts. |
@@ -93,7 +93,6 @@ Configuration precedence is:
 | `DASHSCOPE_API_KEY` | empty | Primary Alibaba Cloud DashScope API key. |
 | `MOODTAG_API_KEY` | empty | Optional relay fallback API key. |
 | `VL_API_KEY` | empty | Backward-compatible fallback API key. |
-| `MOODTAG_TAXONOMY` | bundled default | Optional custom tag taxonomy JSON file. |
 | `MOODTAG_IMAGE_EDGE` | `768` | Preview image long edge sent to the model. |
 | `MOODTAG_CONCURRENCY` | `4` | Number of image analysis requests to run in parallel. |
 | `MOODTAG_MAX_TAGS` | `15` | Maximum Eagle tags written per item. |
@@ -106,9 +105,14 @@ Configuration precedence is:
 | `MOODTAG_NO_RESPONSE_FORMAT` | `false` | `false` sends JSON Mode. Set `true` only for providers that reject JSON Mode. |
 
 Useful single-run flags include `--eagle-api`, `--base-url`,
-`--fallback-base-url`, `--model`, `--taxonomy`, `--image-edge`, `--concurrency`,
+`--fallback-base-url`, `--model`, `--profile`, `--image-edge`, `--concurrency`,
 `--max-tags`, `--limit`, `--retries`, `--temperature`, `--top-p`, `--max-tokens`,
 `--response-format`, and `--no-response-format`.
+
+`--profile` selects one bundled prompt contract and its matching bundled taxonomy.
+`default` uses the general-purpose taxonomy; `editorial` uses the commercial portrait
+taxonomy. Taxonomy is not a runtime override because prompt contract and allowed tags
+must remain aligned.
 
 ## Provider Guidance
 
@@ -324,8 +328,8 @@ disposable Eagle folders unless the overwrite is intentional.
 `tag --write --force` reprocesses items that already have Moodtag output. Use it
 only when intentionally doing a full overwrite.
 
-Generated annotations intentionally do not use a wrapper marker. They are fixed
-natural-language fields:
+Generated annotations intentionally do not use a wrapper marker. Every profile
+writes these fixed natural-language fields:
 
 ```text
 Brief: ...
@@ -340,6 +344,11 @@ Camera: ...
 
 LightColor: ...
 ```
+
+Both profiles can write evidence metadata when it is present: `VisibleText`,
+`BrandEvidence`, `ProductCategories`, and `CommercialFormatConfidence`.
+`editorial` adds commercial-specific selection guidance and taxonomy; `default`
+keeps the general-purpose taxonomy. Existing six-field annotations remain valid.
 
 `tags` and `use_intents` are written only as Eagle tags, not into annotation
 text. `Elements` is a semicolon-separated visible-object field for full-text

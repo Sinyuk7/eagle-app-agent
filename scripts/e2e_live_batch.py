@@ -129,7 +129,6 @@ def preflight(
     fallback_model: str,
     api_key: str,
     fallback_api_key: str | None,
-    taxonomy_path: Path,
     image_edge: int,
     no_response_format: bool,
     temperature: float,
@@ -137,7 +136,7 @@ def preflight(
     max_tokens: int,
     profile: str,
 ) -> dict[str, Any]:
-    taxonomy = moodtag.load_taxonomy(taxonomy_path)
+    taxonomy = moodtag.load_profile_taxonomy(profile)
     pending = [
         item
         for item in client.list_items(board.id)
@@ -246,10 +245,6 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--discover-models", action="store_true")
-    parser.add_argument(
-        "--taxonomy",
-        default=os.environ.get("MOODTAG_TAXONOMY", moodtag.DEFAULT_TAXONOMY),
-    )
     parser.add_argument("--profile", default="default")
     parser.add_argument(
         "--image-edge",
@@ -359,7 +354,6 @@ def main() -> int:
             "MOODTAG_FALLBACK_BASE_URL": args.fallback_base_url,
             "MOODTAG_MODEL": model,
             "MOODTAG_FALLBACK_MODEL": args.fallback_model,
-            "MOODTAG_TAXONOMY": args.taxonomy,
             "MOODTAG_IMAGE_EDGE": str(args.image_edge),
             "MOODTAG_TEMPERATURE": str(args.temperature),
             "MOODTAG_TOP_P": str(args.top_p),
@@ -397,7 +391,6 @@ def main() -> int:
             fallback_model=args.fallback_model,
             api_key=primary_api_key,
             fallback_api_key=fallback_api_key,
-            taxonomy_path=Path(args.taxonomy),
             image_edge=args.image_edge,
             no_response_format=args.no_response_format,
             temperature=args.temperature,

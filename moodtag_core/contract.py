@@ -29,6 +29,12 @@ DEFAULT_NO_RESPONSE_FORMAT = False
 
 
 ANNOTATION_FIELDS = ("brief", "elements", "use", "key", "camera", "light_color")
+COMMERCIAL_LIST_FIELDS = (
+    "visible_text",
+    "brand_evidence",
+    "product_categories",
+)
+COMMERCIAL_CONFIDENCE_VALUES = ("confirmed", "probable", "not_assessed")
 ANNOTATION_LABELS = {
     "brief": "Brief",
     "elements": "Elements",
@@ -36,8 +42,20 @@ ANNOTATION_LABELS = {
     "key": "Key",
     "camera": "Camera",
     "light_color": "LightColor",
+    "visible_text": "VisibleText",
+    "brand_evidence": "BrandEvidence",
+    "product_categories": "ProductCategories",
+    "commercial_format_confidence": "CommercialFormatConfidence",
 }
-JSON_TEMPLATE = '{"brief":"","elements":[],"use":"","key":"","camera":"","light_color":"","tags":[],"use_intents":[]}'
+COMMERCIAL_JSON_TEMPLATE = (
+    '{"brief":"","elements":[],"use":"","key":"","camera":"",'
+    '"light_color":"","visible_text":[],"brand_evidence":[],'
+    '"product_categories":[],"commercial_format_confidence":"not_assessed",'
+    '"tags":[],"use_intents":[]}'
+)
+DEFAULT_JSON_TEMPLATE = COMMERCIAL_JSON_TEMPLATE
+EDITORIAL_JSON_TEMPLATE = COMMERCIAL_JSON_TEMPLATE
+JSON_TEMPLATE = DEFAULT_JSON_TEMPLATE
 
 USE_INTENT_TAGS = {
     "pose_reference": "pose ref",
@@ -65,7 +83,12 @@ class MoodtagAnalysis:
     key: str
     camera: str
     light_color: str
+    visible_text: list[str] = field(default_factory=list)
+    brand_evidence: list[str] = field(default_factory=list)
+    product_categories: list[str] = field(default_factory=list)
+    commercial_format_confidence: str = "not_assessed"
     tags: list[str] = field(default_factory=list)
+    tag_groups: dict[str, list[str]] = field(default_factory=dict)
     use_intents: list[str] = field(default_factory=list)
     rejected_tags: list[str] = field(default_factory=list)
     rejected_use_intents: list[str] = field(default_factory=list)

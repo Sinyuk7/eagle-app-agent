@@ -7,9 +7,24 @@ import re
 from .contract import ANNOTATION_FIELDS, ANNOTATION_LABELS, MoodtagAnalysis
 
 ANNOTATION_LABEL_ORDER = [ANNOTATION_LABELS[field] for field in ANNOTATION_FIELDS]
+COMMERCIAL_ANNOTATION_LABEL_ORDER = [
+    ANNOTATION_LABELS["visible_text"],
+    ANNOTATION_LABELS["brand_evidence"],
+    ANNOTATION_LABELS["product_categories"],
+    ANNOTATION_LABELS["commercial_format_confidence"],
+]
+ALL_ANNOTATION_LABELS = ANNOTATION_LABEL_ORDER + COMMERCIAL_ANNOTATION_LABEL_ORDER
 
 
 def build_annotation_block(analysis: MoodtagAnalysis) -> str:
+    has_commercial_metadata = any(
+        (
+            analysis.visible_text,
+            analysis.brand_evidence,
+            analysis.product_categories,
+            analysis.commercial_format_confidence != "not_assessed",
+        )
+    )
     values = {
         "Brief": analysis.brief,
         "Elements": format_elements(analysis.elements),
@@ -17,9 +32,15 @@ def build_annotation_block(analysis: MoodtagAnalysis) -> str:
         "Key": analysis.key,
         "Camera": analysis.camera,
         "LightColor": analysis.light_color,
+        "VisibleText": format_elements(analysis.visible_text),
+        "BrandEvidence": format_elements(analysis.brand_evidence),
+        "ProductCategories": format_elements(analysis.product_categories),
+        "CommercialFormatConfidence": (
+            analysis.commercial_format_confidence if has_commercial_metadata else ""
+        ),
     }
     lines: list[str] = []
-    for label in ANNOTATION_LABEL_ORDER:
+    for label in ALL_ANNOTATION_LABELS:
         value = values.get(label, "").strip()
         if value:
             lines.append(f"{label}: {value}")
@@ -67,7 +88,7 @@ def parse_annotation_fields(annotation: str) -> dict[str, str]:
     text = annotation or ""
     result: dict[str, str] = {}
     matches = list(label_matches(text))
-    labels = set(ANNOTATION_LABEL_ORDER)
+    labels = set(ALL_ANNOTATION_LABELS)
     for index, match in enumerate(matches):
         label = match.group(1)
         if label not in labels:
@@ -89,7 +110,7 @@ def find_analysis_span(annotation: str) -> tuple[int, int] | None:
     matches = [
         match
         for match in label_matches(text)
-        if match.group(1) in ANNOTATION_LABEL_ORDER
+        if match.group(1) in ALL_ANNOTATION_LABELS
     ]
     if not matches:
         return None
@@ -101,7 +122,8 @@ def find_analysis_span(annotation: str) -> tuple[int, int] | None:
     last = max(matches, key=lambda match: match.start())
     after_last = text[last.end() :]
     boundary = re.search(
-        r"\n\s*\n(?!\s*(?:Brief|Elements|Use|Key|Camera|LightColor):)",
+        r"\n\s*\n(?!\s*(?:Brief|Elements|Use|Key|Camera|LightColor|VisibleText|"
+        r"BrandEvidence|ProductCategories|CommercialFormatConfidence):)",
         after_last,
     )
     if boundary:
@@ -112,7 +134,8 @@ def find_analysis_span(annotation: str) -> tuple[int, int] | None:
 def label_matches(text: str) -> list[re.Match[str]]:
     return list(
         re.finditer(
-            r"(?m)^(Brief|Elements|Use|Key|Camera|LightColor):\s*",
+            r"(?m)^(Brief|Elements|Use|Key|Camera|LightColor|VisibleText|"
+            r"BrandEvidence|ProductCategories|CommercialFormatConfidence):\s*",
             text or "",
         )
     )
