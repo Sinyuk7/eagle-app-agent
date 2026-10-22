@@ -4,7 +4,9 @@ import argparse
 import io
 import json
 import os
+import sys
 import time
+import types
 import unittest
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from unittest import mock
@@ -20,6 +22,7 @@ from moodtag.cli import (
 )
 from moodtag.ui.menu import MenuCancelled, MenuChoice, choose
 from moodtag.ui.printer import Printer
+from moodtag.ui.progress import Progress, _cell_width, _fit_title
 from moodtag.ui.session import Session
 
 
@@ -281,6 +284,47 @@ class WorkflowTests(unittest.TestCase):
             "q  Quit\n>\n",
         )
 
+    def test_tty_progress_calls_alive_bar_enter_handle(self):
+        updates: list[tuple[str, int]] = []
+
+        class BarHandle:
+            text = ""
+
+            def __call__(self, count=1):
+                updates.append((self.text, count))
+
+        class BarContext:
+            exited = False
+
+            def __enter__(self):
+                return BarHandle()
+
+            def __exit__(self, *_args):
+                self.exited = True
+
+        bar = BarContext()
+        module = types.SimpleNamespace(alive_bar=lambda *_args, **_kwargs: bar)
+        with (
+            mock.patch.dict(os.environ, {"TERM": "xterm-256color"}, clear=True),
+            mock.patch.dict(sys.modules, {"alive_progress": module}),
+        ):
+            progress = Progress(Printer(stream=TtyStringIO()), 2, "Analyzing")
+            with progress:
+                progress.update("first")
+        self.assertEqual(len(updates), 1)
+        text, count = updates[0]
+        self.assertEqual(count, 1)
+        self.assertIn("first", text)
+        self.assertIn("\x1b[2m", text)
+        self.assertTrue(bar.exited)
+
+    def test_progress_titles_use_a_fixed_display_width_and_ellipsis(self):
+        short = _fit_title("image")
+        long = _fit_title("牛X啊！Lisa登上《ELLE》杂志金九刊封面及写真美图大赏！")
+        self.assertEqual(_cell_width(short), 36)
+        self.assertEqual(_cell_width(long), 36)
+        self.assertIn("...", long)
+
     def test_human_final_result_is_grouped_and_quiet_stays_compact(self):
         result = RunResult("Board", 4, 4, 2, 1, 1)
         stream = io.StringIO()
@@ -352,9 +396,48 @@ class WorkflowTests(unittest.TestCase):
             ["image-1: ✓", "image-2: ✓"],
         )
 
+    def test_default_tag_output_summarizes_skips_while_verbose_lists_them(self):
+        skipped_item = EagleItem("1", "already-tagged", "jpg", [], [], "saved")
+        pending_item = item(2)
+        scope = BoardScope(
+            Board("board", "Board", "Board"), [], [skipped_item, pending_item]
+        )
+        probe = TagItemResult(
+            index=2, item=pending_item, tags=["two"], annotation="two"
+        )
+
+        def run(*options: str) -> str:
+            stderr = io.StringIO()
+            with (
+                mock.patch("moodtag.make_vision_client", return_value=object()),
+                mock.patch("moodtag.cli.EagleClient", return_value=Eagle()),
+                mock.patch("moodtag.cli.load_board_scope", return_value=scope),
+                mock.patch(
+                    "moodtag.cli.has_moodboard_notes",
+                    side_effect=lambda annotation: annotation == "saved",
+                ),
+                mock.patch("moodtag.cli.load_profile_taxonomy", return_value={}),
+                mock.patch("moodtag.cli.eagle_library_images_root", return_value=None),
+                mock.patch("moodtag.cli.analyze_tag_item", return_value=probe),
+                mock.patch("moodtag.cli.run_tag_analysis", return_value=iter(())),
+                redirect_stderr(stderr),
+            ):
+                self.assertEqual(
+                    moodtag.cli._command_tag_v2(self.tag_args(*options)), 0
+                )
+            return stderr.getvalue()
+
+        default_output = run()
+        self.assertNotIn("Skip already-tagged", default_output)
+        self.assertIn("1 skipped", default_output)
+        self.assertIn("already-tagged", run("-v"))
+
     def test_guided_confirmation_clears_the_complete_region_before_tagging(self):
+        spinners: list[str] = []
+
         @contextmanager
-        def no_spinner(*_args, **_kwargs):
+        def no_spinner(_printer, text):
+            spinners.append(text)
             yield
 
         scope = BoardScope(Board("board", "Board", "Board"), [], [item(1)])
@@ -364,7 +447,7 @@ class WorkflowTests(unittest.TestCase):
         with (
             mock.patch("moodtag.cli.spinner", no_spinner),
             mock.patch("moodtag.cli.EagleClient", return_value=Eagle()),
-            mock.patch("moodtag.cli._load_guided_board_scope", return_value=scope),
+            mock.patch("moodtag.cli.load_board_scope", return_value=scope),
             mock.patch("moodtag.cli.prompt_yes_no", return_value=True),
             mock.patch("moodtag.cli.supports_cursor", return_value=True),
             mock.patch("moodtag.cli.clear_previous_lines") as clear_region,
@@ -373,6 +456,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(moodtag.cli._command_guided_tag_v2(args), 0)
         self.assertEqual(clear_region.call_args.args[1], 6)
         command_tag.assert_called_once_with(args)
+        self.assertEqual(spinners, ["Loading your Eagle board"])
 
     def test_menu_retries_then_returns_back_and_session_is_exclusive(self):
         stream = io.StringIO()

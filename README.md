@@ -154,10 +154,10 @@ Reference wall，也可以是 contact sheet、archive shelf、film strip 或其�
 
 `moodtag tag --write` 会覆盖被处理图片的 Eagle `tags` 和 `annotation`，不会和原有元数据合并。
 
-`--board` 默认会递归包含所选文件夹和所有子文件夹。所有 board 命令默认最多允许 100 个去重后的图片项；超过会退出，避免误操作大目录。确认要处理大目录时显式提高门禁：
+`--board` 默认会递归包含所选文件夹和所有子文件夹。所有 board 命令默认最多允许 9999 个去重后的图片项；超过会退出，避免误操作异常大的目录。需要时可显式调整门禁：
 
 ```sh
-moodtag tag --board 'MQBUH98ILYTQ0' --max-board-items 500 --write
+moodtag tag --board 'MQBUH98ILYTQ0' --max-board-items 20000 --write
 ```
 
 只处理当前文件夹、不包含子文件夹时加 `--no-recursive`。

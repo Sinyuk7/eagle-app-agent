@@ -83,7 +83,7 @@ DEFAULT_MAX_TAGS = 15
 DEFAULT_RETRIES = 2
 DEFAULT_USER_AGENT = "moodtag/0.1"
 DEFAULT_LOG_KEEP = 50
-DEFAULT_MAX_BOARD_ITEMS = 100
+DEFAULT_MAX_BOARD_ITEMS = 9999
 DEFAULT_PROFILE = "editorial"
 TAGGING_STYLE_NAMES = {
     "editorial": "Editorial",
@@ -540,7 +540,7 @@ class EagleClient:
 
     def app_info(self) -> dict[str, Any]:
         data = http_request(
-            "GET", url_join(self.base_url, "/api/v2/app/info"), timeout=5
+            "GET", url_join(self.base_url, "/api/application/info"), timeout=5
         )
         self._expect_success(data, "app info")
         return data["data"]
@@ -680,6 +680,10 @@ def normalize_board_query(query: str) -> str:
     normalized = query.strip().strip("/").replace("\\", "/")
     if not normalized:
         return ""
+    if normalized.lower().startswith("folder/"):
+        path_id = normalized.split("/", 1)[1].strip("/")
+        if path_id:
+            return path_id
     parts = urllib.parse.urlsplit(normalized)
     if parts.scheme and parts.netloc:
         params = urllib.parse.parse_qs(parts.query)
@@ -2367,8 +2371,7 @@ def _command_guided_tag_v2(args: argparse.Namespace) -> int:
             printer.emit("Model setup cancelled. Nothing changed.", state="warning")
             return 0
     eagle = public_attr("EagleClient")(args.eagle_api)
-    with spinner(printer, "Loading your Eagle board"):
-        eagle.app_info()
+    eagle.app_info()
     scope = _load_guided_board_scope(args, eagle, printer)
     if scope is None:
         printer.emit("Cancelled. Nothing changed.", state="warning")
@@ -2479,11 +2482,11 @@ def _command_tag_v2(args: argparse.Namespace) -> int:
     for index, item in enumerate(items, 1):
         if has_moodboard_notes(item.annotation) and not args.force:
             skipped += 1
-            if not getattr(args, "quiet", 0):
+            if getattr(args, "verbose", 0) and not getattr(args, "quiet", 0):
                 printer.emit(f"Skip {item.name}: already tagged", state="warning")
         elif unsupported_media_reason(item):
             skipped += 1
-            if not getattr(args, "quiet", 0):
+            if getattr(args, "verbose", 0) and not getattr(args, "quiet", 0):
                 printer.emit(
                     f"Skip {item.name}: unsupported file type", state="warning"
                 )
@@ -2948,7 +2951,7 @@ def build_parser() -> argparse.ArgumentParser:
             ),
             help=(
                 "Abort when recursive board scope exceeds this many unique items "
-                "(default: 100; -1 disables)"
+                "(default: 9999; -1 disables)"
             ),
         )
         p.add_argument(

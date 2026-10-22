@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 import moodtag
-from moodtag.cli import Board, BoardScope
+from moodtag.cli import Board, BoardScope, normalize_board_query
 
 
 class _Eagle:
@@ -19,6 +19,31 @@ class _Eagle:
 
 
 class MoodtagCliP0Tests(unittest.TestCase):
+    def test_app_info_uses_documented_eagle_endpoint(self):
+        payload = {"status": "success", "data": {"version": "4.0.0"}}
+        with mock.patch("moodtag.cli.http_request", return_value=payload) as request:
+            result = moodtag.cli.EagleClient("http://eagle.test/").app_info()
+
+        self.assertEqual(result, {"version": "4.0.0"})
+        request.assert_called_once_with(
+            "GET", "http://eagle.test/api/application/info", timeout=5
+        )
+
+    def test_board_query_accepts_eagle_and_relative_folder_links(self):
+        expected = "MC1W4IJLB9VWS"
+        self.assertEqual(normalize_board_query(f"eagle://folder/{expected}"), expected)
+        self.assertEqual(normalize_board_query(f"/folder/{expected}"), expected)
+        self.assertEqual(
+            normalize_board_query(f"http://localhost:41595/folder?id={expected}"),
+            expected,
+        )
+
+    def test_max_board_items_default_is_9999(self):
+        parser = moodtag.cli.build_parser()
+        args = parser.parse_args(["status", "--board", "BOARD"])
+
+        self.assertEqual(args.max_board_items, 9999)
+
     def _empty_scope(self) -> BoardScope:
         return BoardScope(Board("id", "Board", "Board"), [], [])
 

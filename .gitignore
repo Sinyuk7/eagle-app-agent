@@ -8,3 +8,4 @@ dist/
 .env.*
 !.env.example
 e2e-results/
+.DS_Store
