@@ -21,11 +21,12 @@ MQBUH98ILYTQ0
 
 - 解析并显示目标 Eagle 文件夹
 - 显示 scope、item 数量、当前 model、覆盖风险
-- 首次缺少完整模型配置时，直接在 CLI 中进入 setup
+- 首次缺少模型来源配置时，直接在 CLI 中进入 setup
 - 将 endpoint 配置保存到 JSON，将 key 保存到 `~/.config/moodtag/.env`
 - 用 `y/N` 明确确认后，才开始真正写回 Eagle
 
-运行 `moodtag config model` 选择 catalog 模型和服务 URL；API key 仅保存于 owner-only `.env`。
+运行 `moodtag config model` 选择模型来源和服务 URL。云端模型需要 API key；Ollama 本地模型不需要。
+重复配置会保存为具名模型配置；`moodtag config` 会列出可用名称，运行 `moodtag config model <名称>` 可切换来源。
 
 必要支持面：
 
@@ -52,8 +53,7 @@ moodtag <board-url-or-id>
 ```
 
 安装包自带运行时，使用 `moodtag` 不需要 Python、`uv`、`npm` 或 Homebrew。
-当前安装包支持 Apple Silicon Mac（M1-M5）。首次运行主命令时，CLI 会自动引导
-API key setup。
+当前安装包支持 Apple Silicon Mac（M1-M5）。首次运行主命令时，CLI 会自动引导模型来源配置；只有选择云端服务时才需要 API key。
 
 如果 macOS 提示无法验证开发者，可在 `.pkg` 上按住 Control 点击，选择“打开”并确认；
 也可以到“系统设置 → 隐私与安全性 → 仍要打开”。
@@ -90,7 +90,15 @@ moodtag config
 
 ## 3. 高级命令
 
-主路径之外，现有维护者/高级用户命令仍然保留。
+### 本机 Ollama
+
+`moodtag config model` 会优先提供 Ollama，并只列出服务发现且 `/api/show` 声明支持视觉的已安装模型；不会自动下载模型。Ollama profile 不需要 API key，本地分析失败时不会转发到云端。云端/custom profile 会继续使用已配置的 OpenAI-compatible 服务。
+
+运行前会显示图片目标。Ollama loopback 只表示图片发给本机 Ollama API；Moodtag 会拒绝发现到的 `remote_model` / `remote_host` 信号，但无法核实服务端是否启用了云端推理。希望由管理员进一步限制 Ollama cloud 时，可由用户自行配置 `OLLAMA_NO_CLOUD=1` 或 Ollama `server.json` 的 `disable_ollama_cloud`；Moodtag 不会替用户修改或声称验证这些服务端设置。
+
+Ollama 使用显式的 `qwen-instruct` 采样参数起步（temperature 0.7、top_p 0.8、top_k 20、min_p 0、presence_penalty 1.5、repeat_penalty 1），并默认关闭 Think。对本机 `qwen3.5:9b` 的 8 张图片对照中，Think 关闭时均通过输出校验，耗时约 2.7–5.4 秒；开启时也均通过，但耗时约 29–74 秒。该小样本结果支持速度优先使用 Think 关闭，不能代表所有模型与 Ollama runner。采样参数是 Qwen instruct 的通用建议映射，效果可能随 Ollama 和 runner 版本变化。本机 `/api/show` 曾报告 temperature 1、top_p 0.95、top_k 20、min_p 0、presence_penalty 1.5、repeat_penalty 1。模型 context capacity 是模型声明值，不等于每次请求实际使用的 `num_ctx`。
+
+主路径之外，现有高级命令仍然保留。
 
 查看文件夹状态：
 

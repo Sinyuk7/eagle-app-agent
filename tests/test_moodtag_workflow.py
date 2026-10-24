@@ -4,11 +4,13 @@ import argparse
 import io
 import json
 import os
+import socket
 import sys
 import time
 import types
 import unittest
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 
 import moodtag
@@ -24,6 +26,7 @@ from moodtag.ui.menu import MenuCancelled, MenuChoice, choose
 from moodtag.ui.printer import Printer
 from moodtag.ui.progress import Progress, _cell_width, _fit_title
 from moodtag.ui.session import Session
+from moodtag_core.provider import OllamaVisionClient
 
 
 def item(index: int) -> EagleItem:
@@ -105,6 +108,79 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(payload["changed"], 2)
         self.assertEqual(eagle.updates, ["1", "2"])
         self.assertNotIn("\x1b", stderr.getvalue())
+
+    def test_ollama_cold_start_resumes_guided_tag_job(self):
+        """A cold local API is launched once, then the requested job proceeds."""
+        events: list[str] = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                if self.path != "/api/version":
+                    self.send_error(404)
+                    return
+                encoded = b'{"version":"test-ollama"}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def log_message(self, *_args):
+                return
+
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        server: ThreadingHTTPServer | None = None
+
+        def launch_ollama(*_args, **_kwargs):
+            nonlocal server
+            events.append("launch")
+            server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+            import threading
+
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            return types.SimpleNamespace(returncode=0)
+
+        first = item(1)
+        scope = BoardScope(Board("board", "Board", "Board"), [], [first])
+        result = TagItemResult(index=1, item=first, tags=["one"], annotation="one")
+        eagle = Eagle()
+        eagle.app_info = lambda: events.append("eagle") or {}
+        eagle.update_item = lambda *_args, **_kwargs: None
+        client = OllamaVisionClient(
+            base_url=f"http://127.0.0.1:{port}", model="vision:latest", preset="smoke"
+        )
+        stdout = io.StringIO()
+
+        def analyze(**_kwargs):
+            events.append("analyze")
+            return result
+
+        try:
+            with (
+                mock.patch("moodtag.make_vision_client", return_value=client),
+                mock.patch("moodtag.EagleClient", return_value=eagle),
+                mock.patch("moodtag.cli.load_board_scope", return_value=scope),
+                mock.patch("moodtag.cli.load_profile_taxonomy", return_value={}),
+                mock.patch("moodtag.cli.eagle_library_images_root", return_value=None),
+                mock.patch("moodtag.cli.analyze_tag_item", side_effect=analyze),
+                mock.patch("moodtag_core.provider.sys.platform", "darwin"),
+                mock.patch(
+                    "moodtag_core.provider.subprocess.run", side_effect=launch_ollama
+                ),
+                redirect_stdout(stdout),
+            ):
+                self.assertEqual(
+                    moodtag.cli._command_tag_v2(self.tag_args("--json")), 0
+                )
+            self.assertEqual(events, ["launch", "eagle", "analyze"])
+            self.assertEqual(client.runtime["version"], "test-ollama")
+            self.assertIn('"changed": 1', stdout.getvalue())
+        finally:
+            if server is not None:
+                server.shutdown()
+                server.server_close()
 
     def test_concurrent_analysis_completes_before_stable_multi_item_writes(self):
         eagle = Eagle()

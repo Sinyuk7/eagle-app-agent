@@ -1,0 +1,98 @@
+{
+  "01": {
+    "visible_facts": ["戴深色太阳镜的女性坐在户外咖啡馆", "女性穿黑色上衣和浅色长裤", "桌边有面包和棕色手袋"],
+    "acceptable_variants": {"桌边有面包和棕色手袋": ["旁边放着面包与棕色包", "桌旁可见面包和棕色手提包"]},
+    "disallowed_claims": ["手袋品牌", "具体咖啡馆名称", "巴黎街景"],
+    "tags": ["female portrait", "outdoor photo", "lifestyle", "handbag"]
+  },
+  "02": {
+    "visible_facts": ["一名戴墨镜的人横躺在街边的浅色沙发上", "画面背景是狭窄的城市街道和石质建筑", "人物穿深色上衣和浅色长裤"],
+    "acceptable_variants": {},
+    "disallowed_claims": ["Balenciaga", "campaign", "广告", "具体城市名称"],
+    "tags": ["outdoor photo", "fashion photo", "street fashion", "environment"]
+  },
+  "03": {
+    "visible_facts": ["黑发女性站在城市户外台阶边", "女性穿宽松深色外套和浅色下装", "女性手持一张印有文字的纸张"],
+    "acceptable_variants": {},
+    "disallowed_claims": ["报纸标题", "具体品牌", "具体城市名称"],
+    "tags": ["female portrait", "outdoor photo", "street fashion", "full body"]
+  },
+  "04": {
+    "visible_facts": ["戴帽女性站在浅色瓷砖墙前", "女性穿浅蓝色衬衫、浅色短裤和运动鞋", "女性一条腿屈起并抬高"],
+    "acceptable_variants": {},
+    "disallowed_claims": ["具体品牌", "具体城市名称", "跑步"],
+    "tags": ["female portrait", "outdoor photo", "street fashion", "full body"]
+  },
+  "05": {
+    "visible_facts": ["短发女性站在树林边", "女性穿粉色宽松衬衫和浅色短裤", "画面下方可读文字 VICTORIA BECKHAM", "女性手提蓝色手袋"],
+    "acceptable_variants": {"画面下方可读文字 VICTORIA BECKHAM": ["图中出现 VICTORIA BECKHAM 字样"]},
+    "disallowed_claims": ["Spring 2024 campaign", "广告投放", "具体服装材质"],
+    "tags": ["female portrait", "outdoor photo", "readable wordmark", "handbag"]
+  },
+  "06": {
+    "visible_facts": ["黑发女性坐在户外游乐设施上", "女性穿黑色上衣和黑色长裤", "人物前方有一只深色手袋", "背景有绿色树木和落叶地面"],
+    "acceptable_variants": {},
+    "disallowed_claims": ["Saint Laurent", "Holiday 2022 campaign", "手袋品牌"],
+    "tags": ["female portrait", "outdoor photo", "fashion photo", "handbag"]
+  },
+  "07": {
+    "visible_facts": ["金发女性在户外石质平台间抬腿迈步", "女性穿黑色上衣、黑色短裙和长靴", "远处可见城市建筑和灰色天空"],
+    "acceptable_variants": {},
+    "disallowed_claims": ["Polish Vogue", "具体城市名称", "视频关键帧"],
+    "tags": ["female portrait", "outdoor photo", "fashion photo", "full body"]
+  },
+  "08": {
+    "visible_facts": ["女性坐卧在绿色草地和白色小花间", "女性穿红色图案上衣和浅色短裤", "画面以植物和人物为主"],
+    "acceptable_variants": {},
+    "disallowed_claims": ["具体品牌", "具体地点", "商业广告"],
+    "tags": ["female portrait", "outdoor photo", "fashion photo", "lifestyle"]
+  },
+  "09": {
+    "visible_facts": ["女性仰卧在草地上", "女性穿白色短裤并抱着一件蓬松的浅色外套", "人物腿边有深色鞋靴"],
+    "acceptable_variants": {},
+    "disallowed_claims": ["Loewe", "羊皮", "真毛", "Spring 2023 campaign"],
+    "tags": ["female portrait", "outdoor photo", "fashion photo", "outfit detail"]
+  },
+  "10": {
+    "visible_facts": ["女性穿黑色长裙站在户外石阶边", "女性双手握着一根细长工具", "背景有浅色石墙和绿植"],
+    "acceptable_variants": {},
+    "disallowed_claims": ["具体工具用途", "Vogue Paris", "具体品牌"],
+    "tags": ["female portrait", "outdoor photo", "fashion photo", "full body"]
+  },
+  "11": {
+    "visible_facts": ["红发女性坐在地铁入口台阶上", "入口上方有彩色拱形标识和字母 M", "女性穿深色外套和黑色短裙"],
+    "acceptable_variants": {},
+    "disallowed_claims": ["巴黎地铁", "Vogue Paris", "具体品牌"],
+    "tags": ["female portrait", "outdoor photo", "fashion photo", "street fashion"]
+  },
+  "12": {
+    "visible_facts": ["浅紫色带帽外套置于浅色背景上", "外套有绗缝分区和拉链", "画面中没有人物"],
+    "acceptable_variants": {},
+    "disallowed_claims": ["羽绒填充", "具体品牌", "具体面料成分"],
+    "tags": ["product close-up", "product detail", "product focus", "apparel"]
+  },
+  "13": {
+    "visible_facts": ["金发女性坐在蓝色长沙发上", "女性穿白色上衣和黑色领口装饰", "室内背景有浅色墙面"],
+    "acceptable_variants": {},
+    "disallowed_claims": ["具体品牌", "具体地点", "杂志名称"],
+    "tags": ["female portrait", "indoor", "fashion photo", "sitting"]
+  },
+  "14": {
+    "visible_facts": ["棕发女性坐在小凳上", "女性穿白色衬衫、浅色短裤和白色长袜", "背景是浅色瓷砖墙和深色门窗"],
+    "acceptable_variants": {},
+    "disallowed_claims": ["具体品牌", "具体地点", "白色羊毛"],
+    "tags": ["female portrait", "indoor", "fashion photo", "sitting"]
+  },
+  "15": {
+    "visible_facts": ["红发女性坐在一堆黑色轮胎中间", "女性穿酒红色套装和同色长袜", "背景为户外水泥地面和浅色卷帘门"],
+    "acceptable_variants": {},
+    "disallowed_claims": ["轮胎品牌", "具体品牌", "具体地点"],
+    "tags": ["female portrait", "outdoor photo", "fashion photo", "sitting"]
+  },
+  "16": {
+    "visible_facts": ["短发女性穿黑色西装站在户外木栅栏边", "女性身体向前倾并扶着栅栏", "背景有草地和树木"],
+    "acceptable_variants": {},
+    "disallowed_claims": ["具体品牌", "具体地点", "视频关键帧"],
+    "tags": ["female portrait", "outdoor photo", "fashion photo", "natural pose"]
+  }
+}

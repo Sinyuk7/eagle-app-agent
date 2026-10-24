@@ -140,7 +140,7 @@ class MoodtagCliTests(unittest.TestCase):
                     os.environ, {"MOODTAG_CONFIG": str(config)}, clear=True
                 ),
                 mock.patch("moodtag.cli.sys.stdin.isatty", return_value=True),
-                mock.patch("moodtag.cli.choose", side_effect=[1, 0]),
+                mock.patch("moodtag.cli.choose", side_effect=[2, 0]),
                 mock.patch("builtins.input", side_effect=["https://new.test/v1"]),
                 mock.patch("moodtag.cli.getpass.getpass", return_value=""),
                 mock.patch("moodtag.cli.prompt_yes_no", return_value=True),
@@ -328,6 +328,30 @@ class MoodtagCliTests(unittest.TestCase):
         output = stderr.getvalue()
         self.assertIn("Model: ! Needs setup", output)
         self.assertIn("Tagging style: Editorial", output)
+
+    def test_tty_home_reports_ollama_health_without_api_key(self):
+        stderr = io.StringIO()
+        config = {
+            "source": "ollama",
+            "base_url": "http://127.0.0.1:11434",
+            "model": "qwen3.5:9b",
+            "profile": "editorial",
+        }
+        fake_client = mock.Mock()
+        fake_client.version.return_value = "0.40.8"
+        with (
+            mock.patch("moodtag.cli.load_env_defaults"),
+            mock.patch("moodtag.cli.load_user_config", return_value=config),
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch("moodtag.cli.OllamaVisionClient", return_value=fake_client),
+            mock.patch("moodtag.cli.sys.stdin.isatty", return_value=True),
+            mock.patch("moodtag.cli.sys.stdout.isatty", return_value=True),
+            mock.patch("builtins.input", return_value="q"),
+            redirect_stderr(stderr),
+        ):
+            self.assertEqual(moodtag.main([]), 0)
+        self.assertIn("Ollama ready", stderr.getvalue())
+        self.assertIn("Ollama API reachable", stderr.getvalue())
 
     def test_bare_board_routes_to_guided_tag_and_commands_stay_argparse(self):
         captured = {}

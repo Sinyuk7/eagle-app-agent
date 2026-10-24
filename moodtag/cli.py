@@ -52,6 +52,7 @@ from moodtag_core.contract import (
 )
 from moodtag_core.prompts import resolve_profile
 from moodtag_core.provider import (
+    OllamaVisionClient,
     ProviderAuthenticationError,
     elapsed_ms_since,
     normalize_base_url,
@@ -63,6 +64,8 @@ from moodtag_core.response import normalize_analysis_json, parse_analysis_respon
 from moodtag_core.taxonomy import load_profile_taxonomy
 
 from .config import (
+    ACTIVE_PROFILE_KEY,
+    NAMED_PROFILES_KEY,
     ConfigError,
     config_path,
     load_user_config,
@@ -1110,11 +1113,27 @@ def build_notes_block(result: MoodtagAnalysis) -> str:
     return build_annotation_block(result)
 
 
-def make_vision_client(args: argparse.Namespace) -> VisionClient | MockVisionClient:
+def make_vision_client(
+    args: argparse.Namespace,
+) -> VisionClient | OllamaVisionClient | MockVisionClient:
     if getattr(args, "mock_model", False):
         return MockVisionClient(args.model or "mock-vision", profile=args.profile)
     model = str(getattr(args, "model", "")).strip()
     base_url = str(getattr(args, "base_url", "")).strip()
+    source = str(getattr(args, "source", "openai-compatible") or "openai-compatible")
+    if source == "ollama":
+        concurrency = max(1, int(getattr(args, "concurrency", 1) or 1))
+        if concurrency > 1:
+            raise MoodtagError(
+                "Ollama currently supports one image request at a time; set --concurrency 1."
+            )
+        return OllamaVisionClient(
+            base_url=base_url or "http://127.0.0.1:11434",
+            model=model,
+            profile=args.profile,
+            preset=str(getattr(args, "ollama_preset", "qwen-instruct")),
+            options={"num_predict": args.max_tokens},
+        )
     api_key = os.environ.get("MOODTAG_API_KEY", "").strip()
     missing = [
         name for name, value in (("base URL", base_url), ("model", model)) if not value
@@ -1144,6 +1163,12 @@ def make_vision_client(args: argparse.Namespace) -> VisionClient | MockVisionCli
 
 
 def ensure_model_setup(args: argparse.Namespace) -> None:
+    if getattr(args, "source", "") == "ollama":
+        if not getattr(args, "model", ""):
+            raise MoodtagError(
+                "Ollama model is not configured. Run `moodtag config model`."
+            )
+        return
     complete = bool(
         getattr(args, "base_url", "")
         and getattr(args, "model", "")
@@ -1159,9 +1184,12 @@ def ensure_model_setup(args: argparse.Namespace) -> None:
         raise MoodtagError("Model setup incomplete. Run `moodtag config model`.")
     values = _setup_prompt(Printer())
     setup_printer = Printer()
+    source = values.get("source", "openai-compatible")
     setup_printer.emit(f"Service URL: {values['base_url']}")
     setup_printer.emit(f"Model: {values['model']}")
-    setup_printer.emit("API key: Ready")
+    setup_printer.emit(
+        "API key: Not required" if source == "ollama" else "API key: Ready"
+    )
     if not prompt_yes_no(
         "Save this model configuration?", default=False, printer=setup_printer
     ):
@@ -1169,6 +1197,8 @@ def ensure_model_setup(args: argparse.Namespace) -> None:
     _persist_setup(values)
     args.base_url = values["base_url"]
     args.model = values["model"]
+    args.source = source
+    args.ollama_preset = values.get("ollama_preset", "qwen-instruct")
     if "MOODTAG_API_KEY" not in os.environ:
         os.environ["MOODTAG_API_KEY"] = values["api_key"]
 
@@ -1626,6 +1656,18 @@ def endpoint_display_host(base_url: str) -> str:
     if parts.netloc:
         return parts.netloc
     return str(base_url or "")
+
+
+def image_destination_message(record: dict[str, Any]) -> str:
+    if record.get("protocol") == "ollama":
+        return (
+            "Images go to the configured loopback Ollama API; "
+            "server-side inference locality cannot be independently verified."
+        )
+    return (
+        "Images will be sent to the configured model endpoint "
+        f"({endpoint_display_host(record.get('base_url', ''))})."
+    )
 
 
 def model_endpoint_records(vision: Any) -> list[dict[str, Any]]:
@@ -2456,6 +2498,8 @@ def _command_tag_v2(args: argparse.Namespace) -> int:
     try:
         with session.wait("Connecting to Eagle and model"):
             vision = public_attr("make_vision_client")(args)
+            if isinstance(vision, OllamaVisionClient):
+                vision.preflight()
             eagle = public_attr("EagleClient")(args.eagle_api)
             eagle.app_info()
             scope = load_board_scope(
@@ -2496,6 +2540,12 @@ def _command_tag_v2(args: argparse.Namespace) -> int:
         printer.emit(
             f"Tagging \u201c{scope.board.path}\u201d: {len(work_items)}/{total} images",
             state="active",
+        )
+    endpoint_record = model_endpoint_record(vision)
+    if endpoint_record:
+        printer.emit(
+            f"Image destination: {image_destination_message(endpoint_record)}",
+            force=True,
         )
 
     taxonomy = load_profile_taxonomy(args.profile)
@@ -2716,23 +2766,58 @@ def command_reset(args: argparse.Namespace) -> int:
 def effective_model_config(config: dict[str, str]) -> dict[str, str]:
     base_url = config.get("base_url", "")
     model = config.get("model", "")
+    source = config.get("source") or ("openai-compatible" if base_url or model else "")
+    if source == "ollama":
+        return {
+            "protocol": "ollama",
+            "source": source,
+            "base_url": base_url or "http://127.0.0.1:11434",
+            "model": model,
+        }
     protocol = ""
     if model:
         try:
             protocol = protocol_for_model(model)
         except CoreError:
             protocol = ""
-    return {"protocol": protocol, "base_url": base_url, "model": model}
+    return {
+        "protocol": protocol,
+        "source": source,
+        "base_url": base_url,
+        "model": model,
+    }
 
 
 def _setup_prompt(printer: Printer) -> dict[str, str]:
     try:
         protocol_index = choose(
-            printer, "Choose model API", ["Chat Completions", "Responses"]
+            printer,
+            "Choose model source",
+            ["Ollama (local)", "Chat Completions", "Responses"],
         )
         if protocol_index is None:
             raise MoodtagError("Setup cancelled.")
-        protocol = ("chat", "responses")[protocol_index]
+        if protocol_index == 0:
+            printer.emit("Ollama URL (default http://127.0.0.1:11434):")
+            base_url = input().strip() or "http://127.0.0.1:11434"
+            probe = OllamaVisionClient(base_url=base_url, model="discovery")
+            probe.preflight()
+            available = discover_ollama_vision_models(probe)
+            if not available:
+                raise MoodtagError(
+                    "No installed vision-capable Ollama models were found; install one explicitly."
+                )
+            model_index = choose(printer, "Choose installed vision model", available)
+            if model_index is None:
+                raise MoodtagError("Setup cancelled.")
+            return {
+                "source": "ollama",
+                "base_url": base_url,
+                "model": available[model_index],
+                "ollama_preset": "qwen-instruct",
+                "api_key": "",
+            }
+        protocol = ("chat", "responses")[protocol_index - 1]
         models = models_for_protocol(protocol)
         model_index = choose(
             printer,
@@ -2758,10 +2843,25 @@ def _setup_prompt(printer: Printer) -> dict[str, str]:
     if not api_key and not os.environ.get("MOODTAG_API_KEY", "").strip():
         raise MoodtagError("Setup cancelled.")
     return {
+        "source": "openai-compatible",
         "base_url": base_url,
         "model": model,
         "api_key": api_key,
     }
+
+
+def discover_ollama_vision_models(probe: OllamaVisionClient) -> list[str]:
+    """Return installed models explicitly advertising vision capability."""
+    available: list[str] = []
+    for entry in probe.models():
+        name = str(entry.get("name") or entry.get("model") or "")
+        if not name:
+            continue
+        metadata = probe.inspect_model(name)
+        capabilities = metadata.get("capabilities", entry.get("capabilities", []))
+        if isinstance(capabilities, list) and "vision" in capabilities:
+            available.append(name)
+    return available
 
 
 def _persist_setup(values: dict[str, str]) -> None:
@@ -2771,7 +2871,25 @@ def _persist_setup(values: dict[str, str]) -> None:
     old_env = env_file.read_bytes() if env_file.exists() else None
     try:
         config = load_user_config(config_file)
-        config.update({key: values[key] for key in ("base_url", "model")})
+        profile_id = re.sub(
+            r"[^A-Za-z0-9_.-]+",
+            "-",
+            f"{values.get('source', 'openai-compatible')}-{values.get('model', 'model')}",
+        ).strip("-")
+        try:
+            profiles = json.loads(config.get(NAMED_PROFILES_KEY, "{}"))
+        except json.JSONDecodeError:
+            profiles = {}
+        if not isinstance(profiles, dict):
+            profiles = {}
+        profiles[profile_id] = {
+            key: values[key]
+            for key in ("source", "base_url", "model", "ollama_preset")
+            if key in values
+        }
+        config[NAMED_PROFILES_KEY] = json.dumps(profiles, ensure_ascii=False)
+        config[ACTIVE_PROFILE_KEY] = profile_id
+        config.update(profiles[profile_id])
         save_user_config(config, config_file)
         if values.get("api_key"):
             save_env_values({"MOODTAG_API_KEY": values["api_key"]}, env_file)
@@ -2790,7 +2908,20 @@ def _persist_setup(values: dict[str, str]) -> None:
 
 
 def command_config_model(args: argparse.Namespace) -> int:
-    del args
+    profile_id = str(getattr(args, "profile_id", "") or "").strip()
+    if profile_id:
+        config = load_user_config()
+        try:
+            profiles = json.loads(config.get(NAMED_PROFILES_KEY, "{}"))
+        except json.JSONDecodeError as exc:
+            raise MoodtagError("Named model profiles are invalid.") from exc
+        if profile_id not in profiles:
+            raise MoodtagError(f"Unknown model profile: {profile_id}")
+        config.update(profiles[profile_id])
+        config[ACTIVE_PROFILE_KEY] = profile_id
+        save_user_config(config)
+        Printer().emit(f"Active model profile: {profile_id}", state="success")
+        return 0
     if not sys.stdin.isatty():
         raise MoodtagError("Interactive model setup requires a TTY.")
     printer = Printer()
@@ -2799,10 +2930,13 @@ def command_config_model(args: argparse.Namespace) -> int:
     except SetupCancelled:
         printer.emit("Model setup cancelled. Nothing changed.", state="warning")
         return 0
-    printer.emit(f"API format: {protocol_for_model(values['model'])}")
+    source = values.get("source", "openai-compatible")
+    printer.emit(
+        f"API format: {source if source == 'ollama' else protocol_for_model(values['model'])}"
+    )
     printer.emit(f"Service URL: {values['base_url']}")
     printer.emit(f"Model: {values['model']}")
-    printer.emit("API key: Ready")
+    printer.emit("API key: Not required" if source == "ollama" else "API key: Ready")
     if not prompt_yes_no(
         "Save this model configuration?", default=False, printer=printer
     ):
@@ -2869,7 +3003,9 @@ def command_config_show(args: argparse.Namespace) -> int:
         "Model configuration: "
         + (
             "Ready"
-            if view["base_url"] and view["model"] and view["api_key"] == "set"
+            if view["base_url"]
+            and view["model"]
+            and (view["source"] == "ollama" or view["api_key"] == "set")
             else "Needs setup"
         )
     )
@@ -2877,6 +3013,14 @@ def command_config_show(args: argparse.Namespace) -> int:
     printer.emit(f"API format: {view['protocol'] or '-'}")
     printer.emit(f"Service URL: {view['base_url'] or '-'}")
     printer.emit(f"Model: {view['model'] or '-'}")
+    if config.get(ACTIVE_PROFILE_KEY):
+        printer.emit(f"Model profile: {config[ACTIVE_PROFILE_KEY]}")
+    try:
+        profiles = json.loads(config.get(NAMED_PROFILES_KEY, "{}"))
+    except json.JSONDecodeError:
+        profiles = {}
+    if profiles:
+        printer.emit("Available model profiles: " + ", ".join(sorted(profiles)))
     printer.emit(f"API key: {view['api_key_source']}")
     return 0
 
@@ -2903,6 +3047,10 @@ def command_config_reset(args: argparse.Namespace) -> int:
     if selected in {1, 2}:
         values.pop("base_url", None)
         values.pop("model", None)
+        values.pop("source", None)
+        values.pop("ollama_preset", None)
+        values.pop(NAMED_PROFILES_KEY, None)
+        values.pop(ACTIVE_PROFILE_KEY, None)
         remove_env_value("MOODTAG_API_KEY")
         os.environ.pop("MOODTAG_API_KEY", None)
     save_user_config(values)
@@ -2978,7 +3126,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--mock-model", action="store_true", help="Use deterministic mock model"
     )
     tag.set_defaults(
-        base_url=user_config.get("base_url", ""), model=user_config.get("model", "")
+        base_url=user_config.get("base_url", ""),
+        model=user_config.get("model", ""),
+        source=user_config.get("source")
+        or (
+            "openai-compatible"
+            if user_config.get("base_url") or user_config.get("model")
+            else ""
+        ),
+        ollama_preset=user_config.get("ollama_preset", "qwen-instruct"),
     )
     tag.add_argument(
         "--image-edge",
@@ -2988,7 +3144,11 @@ def build_parser() -> argparse.ArgumentParser:
     tag.add_argument(
         "--concurrency",
         type=int,
-        default=env_int("MOODTAG_CONCURRENCY", DEFAULT_CONCURRENCY, minimum=1),
+        default=env_int(
+            "MOODTAG_CONCURRENCY",
+            1 if user_config.get("source") == "ollama" else DEFAULT_CONCURRENCY,
+            minimum=1,
+        ),
         help="Number of image analysis requests to run in parallel",
     )
     tag.add_argument(
@@ -3074,6 +3234,9 @@ def build_parser() -> argparse.ArgumentParser:
     config_profile.add_argument("profile", nargs="?")
     config_profile.set_defaults(func=command_config_profile)
     config_model = config_sub.add_parser("model", help="Configure model service")
+    config_model.add_argument(
+        "profile_id", nargs="?", help="Switch to a saved model profile"
+    )
     config_model.set_defaults(func=command_config_model)
     config_reset = config_sub.add_parser("reset", help="Safely reset configuration")
     config_reset.set_defaults(func=command_config_reset)
@@ -3110,17 +3273,37 @@ def is_board_candidate(value: str) -> bool:
 def command_home() -> int:
     printer = Printer()
     config = load_user_config()
+    source = config.get("source") or (
+        "openai-compatible" if config.get("base_url") or config.get("model") else ""
+    )
     ready = bool(
         config.get("base_url")
         and config.get("model")
-        and os.environ.get("MOODTAG_API_KEY", "").strip()
+        and (source == "ollama" or os.environ.get("MOODTAG_API_KEY", "").strip())
     )
+    ollama_health = ""
+    if source == "ollama" and ready:
+        try:
+            client = OllamaVisionClient(
+                base_url=config.get("base_url") or "http://127.0.0.1:11434",
+                model=config["model"],
+            )
+            client.version()
+            ollama_health = " · Ollama API reachable"
+        except CoreError:
+            ready = False
+            ollama_health = " · Ollama API unavailable"
     printer.emit("Moodtag", tone="brand")
     printer.emit("")
     printer.emit_parts(
         [
             ("Model: ", "secondary"),
-            ("Ready", "success") if ready else ("! Needs setup", "warning"),
+            (
+                ("Ollama ready" if source == "ollama" else "Ready") + ollama_health,
+                "success",
+            )
+            if ready
+            else ("! Needs setup" + ollama_health, "warning"),
         ]
     )
     current_style = config.get("profile", DEFAULT_PROFILE) or DEFAULT_PROFILE

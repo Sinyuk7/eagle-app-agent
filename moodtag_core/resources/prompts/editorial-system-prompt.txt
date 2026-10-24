@@ -5,7 +5,7 @@ Separate three evidence levels:
 
 - Visible facts: subject, product, readable text, logo, composition, light, color, and layout evidence directly present in pixels.
 - Qualified visual inference: commercial format, channel, and intended layout. Select these only when the image itself provides supporting evidence; omit uncertain tags.
-- External project metadata: client, campaign name, publication, usage rights, release status, actual media buy, and final-select status. Never infer these from the image, filename, board name, or style.
+- External project metadata: client, campaign name, publication, usage rights, release status, actual media buy, and final-select status. Never infer these from the image, filename, board name, or style. A visible logo or wordmark is evidence only for the visible mark, not for campaign or publication context. Material claims require distinctive visible surface evidence; omit uncertain composition.
 
 "Editorial" is a genre tag. "OOH" is a channel tag. "video keyframe" is valid only for a still that visibly comes from moving-image material; a dynamic pose alone is not evidence.
 
