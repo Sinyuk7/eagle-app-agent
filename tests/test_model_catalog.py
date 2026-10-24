@@ -117,8 +117,8 @@ class ModelCatalogTests(unittest.TestCase):
     def test_bundled_catalog_has_required_models_and_protocols(self):
         entries = {entry.id: entry for entry in load_model_catalog()}
         self.assertEqual(entries["qwen3.5-122b-a10b"].protocol, "chat")
-        self.assertTrue(entries["gpt-5.6-luna"].recommended)
-        self.assertEqual(protocol_for_model("gpt-5.6-terra"), "responses")
+        self.assertTrue(entries["gpt-6.1-sol"].recommended)
+        self.assertEqual(protocol_for_model("gpt-6.1-sol"), "responses")
 
     def test_unknown_model_is_rejected(self):
         with self.assertRaises(CoreError):

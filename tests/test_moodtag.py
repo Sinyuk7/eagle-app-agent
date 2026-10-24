@@ -154,7 +154,7 @@ class MoodtagCliTests(unittest.TestCase):
 
             saved = json.loads(config.read_text(encoding="utf-8"))
             self.assertEqual(saved["base_url"], "https://new.test/v1")
-            self.assertEqual(saved["model"], "gpt-5.6-luna")
+            self.assertEqual(saved["model"], "gpt-6.1-sol")
             self.assertEqual(saved["profile"], "default")
             self.assertEqual(saved["eagle_api"], "http://eagle.test")
             self.assertNotIn("api_key", saved)
