@@ -21,13 +21,13 @@ Moodtag has two semantic profiles, each represented by a system and user prompt.
 
 ## Decisions
 
-1. **Schema owns structure, descriptions own concise field meaning.** Keep the current required fields, `additionalProperties: false`, `elements.minItems`, and Editorial confidence enum. Add short descriptions for fields whose meaning is easy to misinterpret, especially `elements`, `key`, `suggest_title`, and `commercial_format_confidence`. Do not add broad pattern, length, or dynamic enum constraints.
+1. **Schema owns structure, descriptions own concise field meaning.** Store one readable JSON resource per profile under `moodtag_core/resources/schemas/`, and keep `moodtag_json_schema(profile)` as the shared loading entry point. Keep the current required fields, `additionalProperties: false`, `elements.minItems`, and Editorial confidence enum. Add short descriptions for fields whose meaning is easy to misinterpret, especially `elements`, `key`, `suggest_title`, and `commercial_format_confidence`. Do not add broad pattern, length, or dynamic enum constraints.
 
 2. **Prompts own visual semantics.** Keep four resources and two profiles. Remove full JSON templates, key-order instructions, raw-JSON/Markdown repetition, and duplicated type explanations. Retain evidence priority, metadata limits, searchable element rules, brand/logo evidence, commercial-format qualification, language style, and title-preservation behavior.
 
 3. **Structured outputs are mandatory.** Remove `--no-response-format`, `--response-format`, `MOODTAG_NO_RESPONSE_FORMAT`, the default constant, constructor switches, and provider conditionals. Remote Chat and Responses continue using their native strict JSON Schema envelopes; Ollama continues using `format` with the shared schema. Unsupported providers fail explicitly.
 
-4. **Per-image context stays after cacheable instructions.** System prompt, profile prompt, taxonomy, and use intents remain in the stable prefix. Original title and sanitized source URL remain in the per-image user message so explicit prompt caching is reusable across images.
+4. **Stable Prefix is not synonymous with System Prompt.** The System Prompt carries profile-level analysis principles. The rendered Stable Profile Prompt carries task instructions plus the task's Taxonomy and Use Intents. Explicit-cache requests place both together in the stable Developer prefix and put original title, sanitized source URL, and image in the following per-image User message. Non-cached requests retain equivalent semantic content in their existing system/user arrangement.
 
 5. **Validation remains layered.** Keep provider response parsing and Ollama schema validation. Require `suggest_title` as a string everywhere; empty string is valid and means preserve the existing name. Do not add compatibility defaults for missing fields.
 

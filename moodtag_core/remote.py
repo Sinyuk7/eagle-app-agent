@@ -29,7 +29,6 @@ from .common import (
 )
 from .contract import (
     DEFAULT_MAX_TOKENS,
-    DEFAULT_NO_RESPONSE_FORMAT,
     DEFAULT_TEMPERATURE,
     DEFAULT_TOP_P,
     MoodtagAnalysis,
@@ -41,8 +40,12 @@ from .prompts import (
     render_user_prompt,
     resolve_profile,
 )
-from .response import parse_analysis_response
-from .schema import moodtag_json_schema
+from .response import (
+    extract_assistant_content,
+    parse_analysis_response,
+    parse_json_content,
+)
+from .schema import moodtag_json_schema, validate_json_schema
 
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 _SUCCESS_FINISH_REASONS = {"stop", "tool_calls", "function_call"}
@@ -96,21 +99,21 @@ class VisionClient:
         base_url: str,
         model: str,
         api_key: str | None,
-        response_format: bool = not DEFAULT_NO_RESPONSE_FORMAT,
         temperature: float = DEFAULT_TEMPERATURE,
         top_p: float = DEFAULT_TOP_P,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         profile: str = "editorial",
+        output_language: str = "zh",
     ) -> None:
         self.protocol = validate_protocol(protocol)
         self.base_url = normalize_base_url(base_url, self.protocol)
         self.model = str(model or "").strip()
         self.api_key = api_key
-        self.response_format = response_format
         self.temperature = temperature
         self.top_p = top_p
         self.max_tokens = max_tokens
         self.profile = resolve_profile(profile).id
+        self.output_language = output_language
         entry = catalog_entry_for_model(self.model)
         self.explicit_prompt_cache = bool(
             entry
@@ -138,7 +141,9 @@ class VisionClient:
         source_url: str = "",
     ) -> dict[str, Any]:
         system = read_system_prompt(profile=self.profile)
-        prompt = render_user_prompt(taxonomy, profile=self.profile)
+        prompt = render_user_prompt(
+            taxonomy, profile=self.profile, output_language=self.output_language
+        )
         item_context = render_item_context(original_title, source_url)
         dynamic_prompt = f"{prompt}{item_context}"
         if self.protocol == "chat":
@@ -197,15 +202,14 @@ class VisionClient:
                 "max_tokens": self.max_tokens,
                 "messages": messages,
             }
-            if self.response_format:
-                payload["response_format"] = {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": _SCHEMA_NAME,
-                        "strict": True,
-                        "schema": moodtag_json_schema(self.profile),
-                    },
-                }
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": _SCHEMA_NAME,
+                    "strict": True,
+                    "schema": moodtag_json_schema(self.profile),
+                },
+            }
             if self.explicit_prompt_cache:
                 payload["prompt_cache_options"] = {"mode": "explicit", "ttl": "30m"}
             return payload
@@ -259,15 +263,14 @@ class VisionClient:
             "reasoning": {"effort": "low"},
             "input": input_items,
         }
-        if self.response_format:
-            payload["text"] = {
-                "format": {
-                    "type": "json_schema",
-                    "name": _SCHEMA_NAME,
-                    "strict": True,
-                    "schema": moodtag_json_schema(self.profile),
-                }
+        payload["text"] = {
+            "format": {
+                "type": "json_schema",
+                "name": _SCHEMA_NAME,
+                "strict": True,
+                "schema": moodtag_json_schema(self.profile),
             }
+        }
         if self.explicit_prompt_cache:
             payload["prompt_cache_options"] = {"mode": "explicit", "ttl": "30m"}
         return payload
@@ -343,6 +346,8 @@ class VisionClient:
                 status_error = _response_status_error(response.data, endpoint.protocol)
                 if status_error:
                     raise CoreError(status_error)
+                parsed = parse_json_content(extract_assistant_content(response.data))
+                validate_json_schema(parsed, moodtag_json_schema(self.profile))
                 result = parse_analysis_response(
                     response.data, taxonomy, max_tags=max_tags
                 )
@@ -483,26 +488,3 @@ class VisionClient:
                 headers=headers or {},
             )
         )
-
-
-OLLAMA_PRESETS: dict[str, dict[str, Any]] = {
-    "smoke": {"temperature": 0, "think": False},
-    "qwen-instruct": {
-        "temperature": 0.7,
-        "top_p": 0.8,
-        "top_k": 20,
-        "min_p": 0,
-        "presence_penalty": 1.5,
-        "repeat_penalty": 1,
-        "think": False,
-    },
-    "mlx-default": {
-        "temperature": 1,
-        "top_p": 0.95,
-        "top_k": 20,
-        "min_p": 0,
-        "presence_penalty": 1.5,
-        "repeat_penalty": 1,
-        "think": False,
-    },
-}

@@ -46,7 +46,6 @@ from moodtag_core.catalog import (
 )
 from moodtag_core.contract import (
     DEFAULT_MAX_TOKENS,
-    DEFAULT_NO_RESPONSE_FORMAT,
     DEFAULT_TEMPERATURE,
     DEFAULT_TOP_P,
     MIN_MAX_TOKENS,
@@ -77,7 +76,7 @@ from .config import (
     save_user_config,
     update_user_config,
 )
-from .ui.locale import tr
+from .ui.locale import language, tr
 from .ui.menu import MenuCancelled, MenuChoice, choose
 from .ui.printer import Printer
 from .ui.session import Session
@@ -1488,6 +1487,7 @@ def make_vision_client(
             base_url=base_url or "http://127.0.0.1:11434",
             model=model,
             profile=args.profile,
+            output_language=language(),
             preset=str(getattr(args, "ollama_preset", "qwen-instruct")),
             options={"num_predict": args.max_tokens},
         )
@@ -1511,11 +1511,11 @@ def make_vision_client(
         base_url=base_url,
         model=model,
         api_key=api_key,
-        response_format=not args.no_response_format,
         temperature=args.temperature,
         top_p=args.top_p,
         max_tokens=args.max_tokens,
         profile=args.profile,
+        output_language=language(),
     )
 
 
@@ -4119,17 +4119,6 @@ def build_parser(user_config: dict[str, str] | None = None) -> argparse.Argument
     )
     advanced.add_argument("-q", "--quiet", action="count", default=0)
     advanced.add_argument("-v", "--verbose", action="count", default=0)
-    advanced.add_argument(
-        "--no-response-format",
-        action="store_true",
-        default=env_bool("MOODTAG_NO_RESPONSE_FORMAT", DEFAULT_NO_RESPONSE_FORMAT),
-    )
-    advanced.add_argument(
-        "--response-format",
-        dest="no_response_format",
-        action="store_false",
-        default=argparse.SUPPRESS,
-    )
     tag.add_argument(
         "--guided-main-flow",
         action="store_true",

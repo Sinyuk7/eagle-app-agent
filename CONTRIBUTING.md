@@ -144,11 +144,9 @@ printing secrets. Use `moodtag config model` for interactive setup.
 | `MOODTAG_MAX_TOKENS` | `1028` | Max output tokens. Values below 1028 are rejected. |
 | `MOODTAG_LOG_DIR` | `~/.cache/moodtag/runs` | JSONL run log directory for `moodtag tag`. |
 | `MOODTAG_LOG_KEEP` | `50` | Number of newest `moodtag-*.jsonl` run logs to keep. |
-| `MOODTAG_NO_RESPONSE_FORMAT` | `false` | `false` sends JSON Mode. Set `true` only for providers that reject JSON Mode. |
 
 Useful single-run flags include `--eagle-api`, `--profile`, `--image-edge`, `--concurrency`,
-`--max-tags`, `--limit`, `--retries`, `--temperature`, `--top-p`, `--max-tokens`,
-`--response-format`, and `--no-response-format`.
+`--max-tags`, `--limit`, `--retries`, `--temperature`, `--top-p`, `--max-tokens`.
 
 `--profile` selects one bundled prompt contract and its matching bundled taxonomy.
 `default` uses the general-purpose taxonomy; `editorial` uses the commercial portrait

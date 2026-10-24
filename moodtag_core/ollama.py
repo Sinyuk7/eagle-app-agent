@@ -63,6 +63,7 @@ class OllamaVisionClient:
         options: dict[str, Any] | None = None,
         timeout: int = 180,
         local_only: bool = True,
+        output_language: str = "zh",
     ) -> None:
         parts = urllib.parse.urlsplit(base_url.rstrip("/"))
         if (
@@ -81,6 +82,7 @@ class OllamaVisionClient:
         if not self.model:
             raise CoreError("Missing Ollama model")
         self.profile = profile
+        self.output_language = output_language
         self.preset = preset
         self.options = dict(OLLAMA_PRESETS[preset])
         self.options.pop("think", None)
@@ -196,7 +198,12 @@ class OllamaVisionClient:
                 {"role": "system", "content": read_system_prompt(profile=self.profile)},
                 {
                     "role": "user",
-                    "content": render_user_prompt(taxonomy, profile=self.profile)
+                    "content": render_user_prompt(
+                        taxonomy,
+                        profile=self.profile,
+                        output_language=self.output_language,
+                        provider="ollama",
+                    )
                     + render_item_context(original_title, source_url),
                     "images": [base64.b64encode(image.read_bytes()).decode("ascii")],
                 },

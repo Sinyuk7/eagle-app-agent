@@ -25,6 +25,26 @@ from moodtag_core.response import extract_assistant_content
 
 
 class SingleProviderProtocolTests(unittest.TestCase):
+    def test_ollama_payload_selects_profile_prompt_and_shared_schema(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "image.jpg"
+            image.write_bytes(b"jpeg")
+            default = OllamaVisionClient(
+                model="vision", profile="default", output_language="en"
+            ).build_payload(image, {"genre": ["fashion"]})
+            editorial = OllamaVisionClient(
+                model="vision", profile="editorial", output_language="zh"
+            ).build_payload(image, {"genre": ["fashion"]})
+
+        default_user = default["messages"][1]["content"]
+        editorial_user = editorial["messages"][1]["content"]
+        self.assertIn("Output language: English", default_user)
+        self.assertIn("Output language: Chinese", editorial_user)
+        self.assertIn("Review relevant taxonomy facets independently", default_user)
+        self.assertIn("Commercial formats are distinct", editorial_user)
+        self.assertEqual(default["format"], moodtag_json_schema("default"))
+        self.assertEqual(editorial["format"], moodtag_json_schema("editorial"))
+
     def test_ollama_default_preset_explicitly_disables_thinking(self):
         with tempfile.TemporaryDirectory() as directory:
             image = Path(directory) / "image.jpg"
@@ -67,11 +87,45 @@ class SingleProviderProtocolTests(unittest.TestCase):
             self.assertIn("https://example.test/pin", prompt)
             self.assertNotIn("private", prompt)
 
+    def test_output_language_is_in_stable_prompt_and_schema_is_language_neutral(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "image.jpg"
+            image.write_bytes(b"jpeg")
+            english = VisionClient(
+                protocol="chat",
+                base_url="https://example.test/v1",
+                model="vision",
+                api_key="key",
+                profile="editorial",
+                output_language="en",
+            ).build_payload(image, {"genre": ["fashion"]})
+            chinese = VisionClient(
+                protocol="chat",
+                base_url="https://example.test/v1",
+                model="vision",
+                api_key="key",
+                profile="editorial",
+                output_language="zh",
+            ).build_payload(image, {"genre": ["fashion"]})
+        english_prompt = english["messages"][1]["content"][0]["text"]
+        chinese_prompt = chinese["messages"][1]["content"][0]["text"]
+        self.assertIn("Output language: English", english_prompt)
+        self.assertIn("Output language: Chinese", chinese_prompt)
+        self.assertIn("genre: fashion", english_prompt)
+        self.assertNotIn("Chinese-first", english_prompt)
+        for profile in ("default", "editorial"):
+            descriptions = moodtag_json_schema(profile)["properties"].values()
+            self.assertFalse(
+                any("Chinese" in str(description) for description in descriptions)
+            )
+
     def test_suggest_title_is_required_by_both_profile_schemas(self):
         for profile in ("default", "editorial"):
             schema = moodtag_json_schema(profile)
             self.assertIn("suggest_title", schema["required"])
             self.assertEqual(schema["properties"]["suggest_title"]["type"], "string")
+            self.assertTrue(schema["properties"]["suggest_title"]["description"])
+            self.assertTrue(schema["properties"]["elements"]["description"])
 
     def test_image_destination_labels_local_api_and_remote_service(self):
         local = cli.image_destination_message(
@@ -94,6 +148,10 @@ class SingleProviderProtocolTests(unittest.TestCase):
             "key": "key",
             "camera": "camera",
             "light_color": "light",
+            "visible_text": [],
+            "brand_evidence": [],
+            "product_categories": [],
+            "commercial_format_confidence": "not_assessed",
             "suggest_title": "",
             "tags": [],
             "use_intents": [],
@@ -177,6 +235,29 @@ class SingleProviderProtocolTests(unittest.TestCase):
         self.assertEqual(payload["input"][0]["role"], "developer")
         self.assertEqual(payload["input"][1]["content"][1]["detail"], "auto")
 
+    def test_prompt_cache_prefix_excludes_per_image_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "image.jpg"
+            image.write_bytes(b"jpeg")
+            payload = VisionClient(
+                protocol="responses",
+                base_url="https://api.openai.com/v1",
+                model="gpt-6.1-sol",
+                api_key="custom-secret",
+            ).build_payload(
+                image,
+                {"style": ["portrait"]},
+                original_title="Per image title",
+                source_url="https://example.test/source?secret=value",
+            )
+        stable = payload["input"][0]["content"][0]["text"]
+        dynamic = payload["input"][1]["content"][0]["text"]
+        self.assertNotIn("Per image title", stable)
+        self.assertNotIn("example.test/source", stable)
+        self.assertIn("Per image title", dynamic)
+        self.assertIn("https://example.test/source", dynamic)
+        self.assertNotIn("secret", dynamic)
+
     def test_custom_endpoint_does_not_assume_prompt_cache_support(self):
         with tempfile.TemporaryDirectory() as directory:
             image = Path(directory) / "image.jpg"
@@ -190,21 +271,6 @@ class SingleProviderProtocolTests(unittest.TestCase):
             payload = client.build_payload(image, {})
         self.assertNotIn("prompt_cache_options", payload)
         self.assertEqual(payload["input"][0]["role"], "system")
-
-    def test_json_mode_can_be_disabled_for_both_protocols(self):
-        with tempfile.TemporaryDirectory() as directory:
-            image = Path(directory) / "image.jpg"
-            image.write_bytes(b"jpeg")
-            for protocol in ("chat", "responses"):
-                payload = VisionClient(
-                    protocol=protocol,
-                    base_url="https://example.test/v1",
-                    model="vision",
-                    api_key="custom-secret",
-                    response_format=False,
-                ).build_payload(image, {})
-                self.assertNotIn("response_format", payload)
-                self.assertNotIn("text", payload)
 
     def test_response_extractors_keep_order_and_reject_empty(self):
         chat = {
@@ -347,6 +413,28 @@ class SingleProviderProtocolTests(unittest.TestCase):
             envelope.metadata.headers, {"x-request-id": "req_test", "retry-after": "2"}
         )
         self.assertEqual(client.last_attempts[-1].submission_state, "response_received")
+
+    def test_remote_rejects_editorial_response_missing_schema_fields(self):
+        payload = self.analysis_payload()
+        payload.pop("visible_text")
+        response = {"choices": [{"message": {"content": json.dumps(payload)}}]}
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "image.jpg"
+            image.write_bytes(b"jpeg")
+            client = VisionClient(
+                protocol="chat",
+                base_url="https://example.test/v1",
+                model="vision",
+                api_key="custom-secret",
+            )
+            with (
+                mock.patch(
+                    "moodtag_core.remote.http_request_with_metadata",
+                    return_value=HTTPResponse(response, 200, {}),
+                ),
+                self.assertRaisesRegex(CoreError, "missing required fields"),
+            ):
+                client.analyze(image, {}, retries=0, max_tags=3)
 
     def test_incomplete_responses_are_rejected_before_business_parse(self):
         with tempfile.TemporaryDirectory() as directory:

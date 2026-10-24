@@ -1,0 +1,97 @@
+{
+  "type": "object",
+  "properties": {
+    "brief": {
+      "type": "string",
+      "description": "Concise description of visible subject, action or state, and scene."
+    },
+    "elements": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "description": "Searchable noun phrases for visible static subjects, clothing, props, and scene objects."
+    },
+    "use": {
+      "type": "string",
+      "description": "Concise note describing the image's practical reference use."
+    },
+    "key": {
+      "type": "string",
+      "description": "Visible visual hook followed by its concrete reference value."
+    },
+    "camera": {
+      "type": "string",
+      "description": "Visible shot size, angle, framing, perspective, lens feel, and scale."
+    },
+    "light_color": {
+      "type": "string",
+      "description": "Visible lighting and color relationships described as one visual system."
+    },
+    "suggest_title": {
+      "type": "string",
+      "description": "Searchable replacement title only when the original title is generic or meaningless; empty string preserves it."
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Exact tags selected from the supplied taxonomy."
+    },
+    "use_intents": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Exact internal use-intent identifiers selected from the supplied list."
+    },
+    "visible_text": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Exact text legible in the image; empty array if none."
+    },
+    "brand_evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Identifiable visible brand marks and their locations; empty array if none."
+    },
+    "product_categories": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Generic product categories identifiable in the image; empty array if none."
+    },
+    "commercial_format_confidence": {
+      "type": "string",
+      "enum": [
+        "confirmed",
+        "probable",
+        "not_assessed"
+      ],
+      "description": "Confidence that the commercial format is supported by visible evidence and context."
+    }
+  },
+  "required": [
+    "brief",
+    "elements",
+    "use",
+    "key",
+    "camera",
+    "light_color",
+    "visible_text",
+    "brand_evidence",
+    "product_categories",
+    "commercial_format_confidence",
+    "suggest_title",
+    "tags",
+    "use_intents"
+  ],
+  "additionalProperties": false
+}

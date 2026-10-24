@@ -9,7 +9,10 @@ from functools import lru_cache
 
 
 def language() -> str:
-    override = os.environ.get("MOODTAG_LANG", "").strip().lower()
+    if "MOODTAG_LANG" not in os.environ:
+        return "en"
+
+    override = os.environ["MOODTAG_LANG"].strip().lower()
     if override:
         return "zh" if override.startswith("zh") else "en"
     return _system_language()

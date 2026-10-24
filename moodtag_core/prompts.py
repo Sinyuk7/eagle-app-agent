@@ -8,7 +8,7 @@ from functools import cache
 from importlib import resources
 from pathlib import Path
 
-from .contract import DEFAULT_JSON_TEMPLATE, EDITORIAL_JSON_TEMPLATE, CoreError
+from .contract import CoreError
 from .taxonomy import render_taxonomy_for_prompt, render_use_intents_for_prompt
 
 PROMPT_PACKAGE = "moodtag_core.resources.prompts"
@@ -25,7 +25,6 @@ class PromptProfile:
     id: str
     system_prompt: str
     user_prompt: str
-    json_template: str
     taxonomy_resource: str
 
 
@@ -34,14 +33,12 @@ PROMPT_PROFILES: dict[str, PromptProfile] = {
         id="default",
         system_prompt=SYSTEM_PROMPT_NAME,
         user_prompt=USER_PROMPT_NAME,
-        json_template=DEFAULT_JSON_TEMPLATE,
         taxonomy_resource="default.json",
     ),
     "editorial": PromptProfile(
         id="editorial",
         system_prompt="editorial-system-prompt.txt",
         user_prompt="editorial-user-prompt.txt",
-        json_template=EDITORIAL_JSON_TEMPLATE,
         taxonomy_resource="editorial.json",
     ),
 }
@@ -108,15 +105,25 @@ def render_user_prompt(
     path: Path | None = None,
     *,
     profile: str = "editorial",
+    output_language: str = "zh",
+    provider: str = "remote",
 ) -> str:
     prompt_profile = resolve_profile(profile)
+    if provider not in {"remote", "ollama"}:
+        raise CoreError(f"Unknown prompt provider: {provider}")
+    resource_name = prompt_profile.user_prompt
+    if provider == "ollama":
+        resource_name = f"ollama-{prompt_profile.id}-user-prompt.txt"
     template = (
         read_template(path)
         if path is not None
-        else read_template(resource_name=prompt_profile.user_prompt)
+        else read_template(resource_name=resource_name)
+    )
+    language_name = (
+        "Chinese" if str(output_language).lower().startswith("zh") else "English"
     )
     return (
-        template.replace("{{json_template}}", prompt_profile.json_template)
+        template.replace("{{output_language}}", language_name)
         .replace("{{taxonomy}}", render_taxonomy_for_prompt(taxonomy))
         .replace("{{use_intents}}", render_use_intents_for_prompt())
     )

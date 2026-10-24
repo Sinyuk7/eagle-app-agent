@@ -133,7 +133,6 @@ def preflight(
     model: str,
     api_key: str,
     image_edge: int,
-    no_response_format: bool,
     temperature: float,
     top_p: float,
     max_tokens: int,
@@ -155,7 +154,6 @@ def preflight(
         base_url=base_url,
         model=model,
         api_key=api_key,
-        response_format=not no_response_format,
         temperature=temperature,
         top_p=top_p,
         max_tokens=max_tokens,
@@ -256,17 +254,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-items", type=int, default=20)
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--reset-first", action="store_true")
-    parser.add_argument(
-        "--no-response-format",
-        action="store_true",
-        default=moodtag.DEFAULT_NO_RESPONSE_FORMAT,
-    )
-    parser.add_argument(
-        "--response-format",
-        dest="no_response_format",
-        action="store_false",
-        default=argparse.SUPPRESS,
-    )
     parser.add_argument("--report-dir", default=str(ROOT / "e2e-results"))
     return parser.parse_args()
 
@@ -342,9 +329,6 @@ def main() -> int:
             "MOODTAG_TEMPERATURE": str(args.temperature),
             "MOODTAG_TOP_P": str(args.top_p),
             "MOODTAG_MAX_TOKENS": str(args.max_tokens),
-            "MOODTAG_NO_RESPONSE_FORMAT": "true"
-            if args.no_response_format
-            else "false",
         }
     )
     config_root = Path(tempfile.mkdtemp(prefix="moodtag-e2e-config-"))
@@ -381,7 +365,6 @@ def main() -> int:
             model=model,
             api_key=model_api_key,
             image_edge=args.image_edge,
-            no_response_format=args.no_response_format,
             temperature=args.temperature,
             top_p=args.top_p,
             max_tokens=args.max_tokens,
@@ -428,9 +411,6 @@ def main() -> int:
         "--image-edge",
         str(args.image_edge),
     ]
-    if args.no_response_format:
-        common_tag_args.append("--no-response-format")
-
     runs.append(
         run_moodtag(
             [*common_tag_args, "--limit", str(first_limit)],

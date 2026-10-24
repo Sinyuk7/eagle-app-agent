@@ -1,0 +1,37 @@
+Analyze the image for editorial fashion, beauty, or lifestyle reference indexing.
+
+Output language: {{output_language}}
+Use this language for natural-language fields. Preserve proper nouns, exact visible text, taxonomy tags, use-intent identifiers, and enum values.
+
+Prioritize visible pixels. Original title and source URL are supplemental, unverified context; they cannot prove visible text, logos, brand, product, campaign, or publication channel.
+
+Fields:
+- brief: one concrete sentence about the visible subject, outfit or product, pose, and setting.
+- elements: when enough detail is visible, prefer 3-6 distinct searchable noun phrases for garments, accessories, products, colors, and objects. Keep them visible and static; avoid repeating brief or adding actions, lighting, composition, style, or intent.
+- use: concise practical visual reference value.
+- key: strongest distinctive visual feature and why it matters as a reference. Mention brand evidence only when a graphical mark is identifiable or text is readable; otherwise state that no brand evidence is visible before the visual hook.
+- camera: visible shot size, angle, framing, perspective, placement, and scale.
+- light_color: visible lighting and relationships among dominant, supporting, and accent colors.
+- visible_text: exact readable text from pixels, preserving original spelling and case; do not translate. Empty when none is legible.
+- brand_evidence: identifiable visible logo, wordmark, or product mark and its location. Empty when none is recognizable. Do not infer brands from styling or metadata.
+- product_categories: generic product categories identifiable in the image; empty when none is clear.
+- commercial_format_confidence: use confirmed only with explicit visual evidence, probable when visual evidence and consistent supplemental context support a format, otherwise not_assessed. Metadata alone never confirms a format.
+- suggest_title: provide a concise searchable replacement only when the original title is generic, temporary, or meaningless (for example, IMG_1259, IMG_1234, Clipboard, Untitled, or a number). Preserve meaningful titles as-is with an empty string. Do not invent brands or collections; omit file extensions.
+
+Tags:
+- Review relevant taxonomy facets independently: medium, subject, genre, commercial format, channel, visual role, layout, product category, brand visibility, composition, pose, lighting, color, visual focus, wardrobe, environment, and pipeline.
+- Select all compatible tags clearly supported by the image, not only one general label. Multiple tags may apply across or within facets. Prefer specific useful tags; avoid weak guesses, near-synonyms, and duplicates.
+- Facet cardinality is evidence-driven, not exclusive. A clearly visible studio fashion portrait may support `studio photo`, `fashion photo`, `female portrait`, `full body`, `front view`, `static pose`, `apparel`, and `studio` together when each applies. Do not return only pipeline/reference tags while omitting clear visual facets.
+- Commercial formats are distinct: campaign is concept-led; lookbook presents coordinated looks; catalog emphasizes consistent collection coverage; e-commerce is product-information-led. Product detail describes a close product view. Do not infer a channel or commercial format from image polish alone.
+- Pipeline tags describe workflow or reference use. Keep values such as reference and training data when they are genuinely supported by workflow context; do not infer them from image quality. Pipeline tags belong in tags, not use_intents.
+- Use only exact values from the supplied taxonomy.
+
+Use intents:
+- Consider each listed intent independently and select those supported by a concrete reusable visual value, such as pose, styling, lighting, composition, color, scene, or film language.
+- Return an empty list only when no listed intent is supported; do not add intents just to fill the list.
+
+Allowed taxonomy:
+{{taxonomy}}
+
+Allowed use intents:
+{{use_intents}}

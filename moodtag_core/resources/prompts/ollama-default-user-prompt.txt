@@ -1,0 +1,32 @@
+Analyze the image for visual reference indexing.
+
+Output language: {{output_language}}
+Use this language for natural-language fields. Preserve proper nouns, exact visible text, taxonomy tags, use-intent identifiers, and enum values.
+
+Describe visible evidence first. Original title and source URL are supplemental context; they cannot prove visible text, logos, identity, or other image content.
+
+Fields:
+- brief: one concrete sentence about the main subject, pose or state, and scene.
+- elements: when enough detail is visible, prefer 3-6 distinct searchable noun phrases for subjects, clothing, props, colors, and objects. Keep them static and visible; avoid repeating brief or adding actions, camera, lighting, mood, style, or intent.
+- use: concise practical reference value.
+- key: the strongest visible feature and its concrete reference value.
+- camera: visible framing, angle, perspective, placement, and scale.
+- light_color: visible lighting and relationships between dominant, supporting, and accent colors.
+- suggest_title: provide a concise replacement only when the original title is generic, temporary, or meaningless (for example, IMG_1259, IMG_1234, Clipboard, Untitled, or a number); otherwise return an empty string. Never infer a title from unsupported details.
+
+Tags:
+- Review relevant taxonomy facets independently and select all compatible tags clearly supported by the image, rather than stopping at one broad label.
+- Multiple tags may apply across or within facets. Prefer specific useful tags; avoid weak guesses, near-synonyms, and duplicates.
+- Facet cardinality is evidence-driven, not exclusive. A clearly visible studio fashion portrait may support `studio photo`, `fashion photo`, `female portrait`, `full body`, `front view`, `static pose`, `apparel`, and `studio` together when each applies. Do not return only pipeline/reference tags while omitting clear visual facets.
+- Pipeline tags describe workflow or reference use, not image quality. Do not infer training data, final selection, or other workflow status from polish or clarity alone.
+- Use only exact values from the supplied taxonomy.
+
+Use intents:
+- Consider each listed intent independently and select those that describe a concrete reusable value in the image, such as pose, lighting, composition, color, style, wardrobe, or scene.
+- Return an empty list only when no listed intent is supported; do not add intents just to fill the list.
+
+Allowed taxonomy:
+{{taxonomy}}
+
+Allowed use intents:
+{{use_intents}}
