@@ -29,7 +29,6 @@ from .common import (
 )
 from .contract import (
     DEFAULT_MAX_TOKENS,
-    DEFAULT_NO_RESPONSE_FORMAT,
     DEFAULT_TEMPERATURE,
     DEFAULT_TOP_P,
     MoodtagAnalysis,
@@ -96,7 +95,6 @@ class VisionClient:
         base_url: str,
         model: str,
         api_key: str | None,
-        response_format: bool = not DEFAULT_NO_RESPONSE_FORMAT,
         temperature: float = DEFAULT_TEMPERATURE,
         top_p: float = DEFAULT_TOP_P,
         max_tokens: int = DEFAULT_MAX_TOKENS,
@@ -106,7 +104,6 @@ class VisionClient:
         self.base_url = normalize_base_url(base_url, self.protocol)
         self.model = str(model or "").strip()
         self.api_key = api_key
-        self.response_format = response_format
         self.temperature = temperature
         self.top_p = top_p
         self.max_tokens = max_tokens
@@ -197,15 +194,14 @@ class VisionClient:
                 "max_tokens": self.max_tokens,
                 "messages": messages,
             }
-            if self.response_format:
-                payload["response_format"] = {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": _SCHEMA_NAME,
-                        "strict": True,
-                        "schema": moodtag_json_schema(self.profile),
-                    },
-                }
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": _SCHEMA_NAME,
+                    "strict": True,
+                    "schema": moodtag_json_schema(self.profile),
+                },
+            }
             if self.explicit_prompt_cache:
                 payload["prompt_cache_options"] = {"mode": "explicit", "ttl": "30m"}
             return payload
@@ -259,15 +255,14 @@ class VisionClient:
             "reasoning": {"effort": "low"},
             "input": input_items,
         }
-        if self.response_format:
-            payload["text"] = {
-                "format": {
-                    "type": "json_schema",
-                    "name": _SCHEMA_NAME,
-                    "strict": True,
-                    "schema": moodtag_json_schema(self.profile),
-                }
+        payload["text"] = {
+            "format": {
+                "type": "json_schema",
+                "name": _SCHEMA_NAME,
+                "strict": True,
+                "schema": moodtag_json_schema(self.profile),
             }
+        }
         if self.explicit_prompt_cache:
             payload["prompt_cache_options"] = {"mode": "explicit", "ttl": "30m"}
         return payload

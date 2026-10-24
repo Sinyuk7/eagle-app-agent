@@ -2,48 +2,35 @@
 
 from __future__ import annotations
 
+import json
+from functools import cache
+from importlib import resources
 from typing import Any
 
 from .contract import (
-    ANNOTATION_FIELDS,
-    COMMERCIAL_CONFIDENCE_VALUES,
-    COMMERCIAL_LIST_FIELDS,
     CoreError,
 )
 
 
+@cache
+def _read_schema_resource(profile: str) -> dict[str, Any]:
+    if profile not in {"default", "editorial"}:
+        raise CoreError(f"Unknown schema profile: {profile}")
+    resource = resources.files("moodtag_core.resources.schemas").joinpath(
+        f"{profile}.json"
+    )
+    try:
+        value = json.loads(resource.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        raise CoreError(f"Invalid schema resource: {profile}") from exc
+    if not isinstance(value, dict):
+        raise CoreError(f"Invalid schema resource: {profile}")
+    return value
+
+
 def moodtag_json_schema(profile: str = "editorial") -> dict[str, Any]:
-    """Return Ollama's structured-output schema for the current analysis contract."""
-    properties: dict[str, Any] = {
-        "brief": {"type": "string"},
-        "elements": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-        "use": {"type": "string"},
-        "key": {"type": "string"},
-        "camera": {"type": "string"},
-        "light_color": {"type": "string"},
-        "suggest_title": {"type": "string"},
-        "tags": {"type": "array", "items": {"type": "string"}},
-        "use_intents": {"type": "array", "items": {"type": "string"}},
-    }
-    required = [*ANNOTATION_FIELDS, "suggest_title", "tags", "use_intents"]
-    if profile == "editorial":
-        properties.update(
-            {
-                field: {"type": "array", "items": {"type": "string"}}
-                for field in COMMERCIAL_LIST_FIELDS
-            }
-        )
-        properties["commercial_format_confidence"] = {
-            "type": "string",
-            "enum": list(COMMERCIAL_CONFIDENCE_VALUES),
-        }
-        required.extend([*COMMERCIAL_LIST_FIELDS, "commercial_format_confidence"])
-    return {
-        "type": "object",
-        "properties": properties,
-        "required": required,
-        "additionalProperties": False,
-    }
+    """Load the shared profile-specific structured-output schema resource."""
+    return json.loads(json.dumps(_read_schema_resource(profile)))
 
 
 def validate_json_schema(value: Any, schema: dict[str, Any], path: str = "$") -> None:

@@ -1,0 +1,93 @@
+{
+  "type": "object",
+  "properties": {
+    "brief": {
+      "type": "string",
+      "description": "Concise Chinese description of visible subject, action or state, and scene."
+    },
+    "elements": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "description": "Searchable Chinese noun phrases for visible static subjects, clothing, props, and scene objects."
+    },
+    "use": {
+      "type": "string",
+      "description": "Concise Chinese note describing the image's practical reference use."
+    },
+    "key": {
+      "type": "string",
+      "description": "Visible visual hook followed by its concrete reference value."
+    },
+    "camera": {
+      "type": "string",
+      "description": "Visible shot size, angle, framing, perspective, lens feel, and scale."
+    },
+    "light_color": {
+      "type": "string",
+      "description": "Visible lighting and color relationships described as one visual system."
+    },
+    "suggest_title": {
+      "type": "string",
+      "description": "Searchable replacement title only when the original title is generic or meaningless; empty string preserves it."
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Exact tags selected from the supplied taxonomy."
+    },
+    "use_intents": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Exact internal use-intent identifiers selected from the supplied list."
+    },
+    "visible_text": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Visible visible text evidence; use an empty array when none is confirmed."
+    },
+    "brand_evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Visible brand evidence evidence; use an empty array when none is confirmed."
+    },
+    "product_categories": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Visible product categories evidence; use an empty array when none is confirmed."
+    },
+    "commercial_format_confidence": {
+      "type": "string",
+      "enum": ["confirmed", "probable", "not_assessed"],
+      "description": "Confidence that the commercial format is supported by visible evidence and context."
+    }
+  },
+  "required": [
+    "brief",
+    "elements",
+    "use",
+    "key",
+    "camera",
+    "light_color",
+    "visible_text",
+    "brand_evidence",
+    "product_categories",
+    "commercial_format_confidence",
+    "suggest_title",
+    "tags",
+    "use_intents"
+  ],
+  "additionalProperties": false
+}

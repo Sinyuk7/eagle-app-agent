@@ -46,7 +46,6 @@ from moodtag_core.catalog import (
 )
 from moodtag_core.contract import (
     DEFAULT_MAX_TOKENS,
-    DEFAULT_NO_RESPONSE_FORMAT,
     DEFAULT_TEMPERATURE,
     DEFAULT_TOP_P,
     MIN_MAX_TOKENS,
@@ -1511,7 +1510,6 @@ def make_vision_client(
         base_url=base_url,
         model=model,
         api_key=api_key,
-        response_format=not args.no_response_format,
         temperature=args.temperature,
         top_p=args.top_p,
         max_tokens=args.max_tokens,
@@ -4119,17 +4117,6 @@ def build_parser(user_config: dict[str, str] | None = None) -> argparse.Argument
     )
     advanced.add_argument("-q", "--quiet", action="count", default=0)
     advanced.add_argument("-v", "--verbose", action="count", default=0)
-    advanced.add_argument(
-        "--no-response-format",
-        action="store_true",
-        default=env_bool("MOODTAG_NO_RESPONSE_FORMAT", DEFAULT_NO_RESPONSE_FORMAT),
-    )
-    advanced.add_argument(
-        "--response-format",
-        dest="no_response_format",
-        action="store_false",
-        default=argparse.SUPPRESS,
-    )
     tag.add_argument(
         "--guided-main-flow",
         action="store_true",

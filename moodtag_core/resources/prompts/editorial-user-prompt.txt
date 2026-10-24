@@ -1,38 +1,19 @@
-Analyze this commercial portrait, fashion, beauty, or lifestyle image and output ONLY valid JSON using this exact template and key order:
+Analyze the attached commercial portrait, fashion, beauty, or lifestyle image for visual reference indexing.
 
-{{json_template}}
+Use the allowed taxonomy and use intents. Keep the analysis concise and searchable:
+- brief: visible subject, pose/state, and scene or props in one Chinese sentence.
+- elements: 1-10 unique, visible, static Chinese noun phrases; prioritize garments, product categories, readable brand evidence, main colors, and useful accessories. Exclude action, camera, composition, lighting, mood, style, and intent words.
+- use: short Chinese work note naming the reference dimension.
+- key: start with visible brand/logo/wordmark/product evidence when present; otherwise state 无品牌证据, then give the concrete visual hook. Never infer a brand from styling or metadata.
+- camera: Chinese-first fragments for visible shot size, angle, framing, placement, negative space, perspective, and scale.
+- light_color: Chinese-first fragments describing dominant, supporting, and accent colors and their wardrobe/environment relationships.
+- visible_text: exact readable words or short phrases from pixels; empty when none.
+- brand_evidence: readable brand, wordmark, logo, or product mark and its visible location; empty when none.
+- product_categories: visible generic product-category nouns; empty when none.
+- commercial_format_confidence: confirmed only with explicit pixel evidence, probable when visual evidence and consistent supplied context support a format, otherwise not_assessed. Metadata alone never confirms it.
+- suggest_title: concise searchable replacement only when the original title is generic, temporary, or meaningless; preserve meaningful names with an empty string.
 
-Field definitions:
-- brief: One concise Chinese sentence. Directly state subject, pose/state, and scene or key props. Visible facts only. No intro phrases, no abstract evaluation.
-- elements: Array of 1-10 visible, relatively static, searchable Chinese noun phrases. Prioritize garments, brand evidence, product categories, logo/wordmark, main colors, and key accessories. Keep materials, layering, and secondary accessories only when obvious and useful. Do NOT include action/state, camera/framing, composition, lighting, mood, style labels, brand guesses, or use-intent words. Prefer fewer entries to guessed filler. Use 3-6 entries unless more distinct visible products materially help search; avoid listing every garment synonym or minor prop.
-- use: One short Chinese sentence naming reference value. Write like a work note, not an explanation. Do not use phrases like "此图可作为" or "主要用于"; go straight to the reference dimension.
-- key: Chinese natural language describing the commercial visual hook. Start with visible evidence first: brand/logo/wordmark/product identifier if present; otherwise write "无品牌证据". Brand evidence must come from pixels only. Metadata may help contextualize styling or campaign direction but must not be stated as visible evidence. Use a direct noun-led style. Limit to 1-2 clauses. No generic praise, no "图中可见", no "展示了", no "形成", no "营造", no "呈现", no guessing.
-- camera: Chinese-first short phrase with key professional terms in English only as local modifiers. Only shot size, angle, framing, subject placement, negative space, perspective, and scale. Prefer fragments over full sentences. No camera setup, no narrative, no full English sentence.
-- light_color: Chinese-first short phrase with key professional terms in English only as local modifiers. Describe dominant, supporting, and accent colors plus where they appear. Mention wardrobe, accessory, and environment color relations. Prefer fragments over full sentences. No grading-only description, no full English sentence.
-- visible_text: Array of 0-10 exact readable words, wordmarks, or short phrases visible in pixels. Preserve original spelling and case when legible. Do not guess obscured text. Empty array when none.
-- brand_evidence: Array of 0-10 concise Chinese evidence phrases for a readable brand name, wordmark, logo, or product mark and its visible location. Example: "NIKE Swoosh，夹克左胸". Empty array when no clear evidence. Do not infer brands from styling, publication, campaign, metadata, or context.
-- product_categories: Array of 0-10 visible generic product-category noun phrases, such as "运动鞋", "皮革手袋", or "护肤品". Do not output product SKU, model name, or category not visible enough to identify. Empty array when none.
-- commercial_format_confidence: Exact value "confirmed", "probable", or "not_assessed". Use "confirmed" only when format/channel evidence is explicit in pixels. Use "probable" when visual evidence supports the format and supplied title/source context is consistent with it, but the image cannot confirm it. Otherwise use "not_assessed". Metadata alone never confirms a format.
-- suggest_title: Return a concise, searchable replacement title without a file extension when the original title does not identify the image. Treat filenames, save-action labels, webpage/interface text, dates, numbers, and a brand name alone as uninformative; examples include "收藏到 Campaign", "收藏到 STYLE fall winter", "搜索结果页面", "Clipboard - 2026-09-27 17.03.27", "1", and "Celine". Preserve a title that identifies a specific collection, season, year, publication, or subject. Base the replacement on visible image content, using a visible brand name when clear; otherwise use a neutral description. Return an empty string only when the original title is already informative. Metadata may inform probable format interpretation only when consistent with the image; confirmed still requires explicit visual evidence.
-- tags: Array of exact tags selected only from the allowed taxonomy.
-- use_intents: Array of exact internal use intent ids selected only from the left side of the allowed use intents list.
-
-Language rules:
-- Field names stay English through the JSON keys.
-- Natural-language field values should be Chinese-first. Keep English only for established professional visual terms when they make the description more precise, and never as a full standalone clause.
-- Do not infer brand names from fashion style, campaign title, or magazine context. If no readable logo/wordmark/product mark is visible, do not name a brand.
-- commercial_format supports multiple compatible tags when the image provides evidence across dimensions: for example, campaign + social content + video keyframe can all be valid together. Campaign, lookbook, catalog, and e-commerce are not interchangeable by default: campaign is concept or brand-story led; lookbook shows a collection or coordinated outfits; catalog is collection coverage with consistent presentation; e-commerce is product-information led. Do not force a single tag, but omit unsupported or contradictory guesses.
-- "editorial" belongs to genre. "social content" means platform-native creative such as a post, story, reel cover, or carousel card; select it only when that visual treatment is evident. "social media" is a channel tag and requires platform UI or another clear platform-native cue. "ooh" requires visible outdoor-placement or billboard-style evidence. "video keyframe" needs visible moving-image evidence, not merely motion in a still photo. Never infer TVC, Reels, print, web, marketplace, retail, or presentation from a still image.
-- visual_role allows multiple supported tags. "key visual" is a dominant campaign-style composition; "hero image" is the primary image in a layout or series. Omit either role when it is not visually supported.
-- Select layout_intent tags only for visible compositional evidence such as deliberate copy space, logo-safe negative space, crop direction, cover treatment, banner treatment, or carousel sequence.
-- Facet cardinality is evidence-driven, not exclusive: multiple tags are allowed in every facet when they describe distinct supported dimensions. For example, `photo` + `studio photo`, `fashion photo` + `editorial photo`, or `campaign` + `social content` + `video keyframe` may coexist. Avoid near-synonym stuffing, unsupported metadata guesses, and redundant tags; the global `max_tags` limit remains the final cap.
-- Pipeline tags may be selected directly in tags. Use `reference` for broadly reusable visual material, `training data` for clear, consistently readable visual material without claiming rights, `final select` only for a visually polished candidate rather than an actual project approval, and `test shot` for visible test or setup imagery. Select other pipeline tags only when supported by the image.
-- Prefer direct observation language. Avoid filler such as "图中可见", "此图可作为", "展示了", "营造出", "极具", "通过", "结合", "强调" unless truly necessary.
-- Do not invent tags.
-- If a tag is uncertain, omit it.
-- Analytical natural-language fields must be non-empty strings. `suggest_title` may be empty only when the original title is already informative. elements must contain 1-10 unique entries. visible_text, brand_evidence, and product_categories may be empty arrays; do not add filler values.
-- Do not output pipeline tag names inside use_intents. For example, output "pose_reference", not "pose ref"; output "aigc_prompt_reference", not "prompt ref".
-- Do not repeat any tag or use_intent.
+Natural-language values are Chinese-first. Do not guess brands, text, products, campaign/publication context, TVC, Reels, print, web, marketplace, retail, presentation, social media, or OOH without visual support. Select only exact, non-duplicated taxonomy and use-intent values; pipeline tags belong in tags, not use_intents.
 
 Allowed taxonomy:
 {{taxonomy}}

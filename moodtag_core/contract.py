@@ -20,10 +20,7 @@ MIN_MAX_TOKENS = 1028
 DEFAULT_PRESENCE_PENALTY = 0.3
 DEFAULT_REPETITION_PENALTY = 1.0
 
-# False means JSON Mode is enabled by default:
-# response_format={"type":"json_object"} is sent unless explicitly disabled.
-# Moodtag does not enable thinking mode for this model contract.
-DEFAULT_NO_RESPONSE_FORMAT = False
+# Moodtag requires provider-native JSON Schema structured outputs.
 
 
 ANNOTATION_FIELDS = ("brief", "elements", "use", "key", "camera", "light_color")

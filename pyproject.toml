@@ -51,6 +51,7 @@ include = ["moodtag*", "moodtag_core*"]
 
 [tool.setuptools.package-data]
 "moodtag_core.resources.prompts" = ["*.txt"]
+"moodtag_core.resources.schemas" = ["*.json"]
 "moodtag_core.resources.taxonomy" = ["*.json"]
 "moodtag_core.resources.models" = ["*.json"]
 

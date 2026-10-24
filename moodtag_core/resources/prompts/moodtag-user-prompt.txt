@@ -1,30 +1,15 @@
-Analyze this moodboard image and output ONLY valid JSON using this exact template and key order:
+Analyze the attached image for visual reference indexing.
 
-{{json_template}}
+Describe visible content and select supported tags and use intents from the allowed lists below. Keep analytical fields useful for search and reference:
+- brief: concise Chinese subject, action/state, and scene sentence.
+- elements: 1-10 unique, visible, relatively static Chinese noun phrases for subjects, clothing, props, scene objects, and concrete symbols; exclude actions, camera, lighting, mood, style, and use-intent words.
+- use: concise Chinese note about practical reference use.
+- key: strongest visible visual hook followed by its reference value.
+- camera: visible shot size, angle, framing, perspective, lens feel, distance, and scale; Chinese-first with precise English terms when useful.
+- light_color: visible lighting and color relationships as one creative system.
+- suggest_title: concise searchable replacement only for a generic, temporary, or meaningless original title; otherwise empty string.
 
-Field definitions:
-- brief: One concise Chinese subject-verb-object sentence describing visible image content. Start with the main subject, then action/pose/state, then scene or key props when visible. It answers "图里是什么". Do not write abstract evaluation such as "视觉冲击力", "独特氛围", "充满动感", or "核心价值".
-- elements: Array of 1-10 visible, relatively static, searchable Chinese noun phrases. Include only character appearance, clothing, props, scene objects, and concrete visual symbols. Do NOT include action/state, camera/framing, composition, lighting, mood, style labels, or use-intent words. Prefer fewer entries to guessed filler.
-- use: One natural Chinese sentence explaining how this image should be used later. Prefer "主要用于……参考，也可作为……参考。"
-- key: Chinese natural language describing the strongest visible visual hook and why it is worth saving. Start from observation, then state its reference value. Avoid generic praise.
-- camera: Chinese natural language with key professional terms in English. Describe shot size, angle, lens feel, perspective, framing, subject distance, and scale when visible.
-- light_color: Chinese natural language with key professional terms in English. Describe lighting and color as one creative system.
-- suggest_title: Return a concise, searchable replacement title without a file extension when the original title does not identify the image. Treat filenames, save-action labels, webpage/interface text, dates, numbers, and a brand name alone as uninformative; examples include "收藏到 Campaign", "收藏到 STYLE fall winter", "搜索结果页面", "Clipboard - 2026-09-27 17.03.27", "1", and "Celine". Preserve a title that identifies a specific collection, season, year, publication, or subject. Base the replacement on visible image content, using a visible brand name when clear; otherwise use a neutral description. Return an empty string only when the original title is already informative.
-- tags: Array of exact tags selected only from the allowed taxonomy.
-- use_intents: Array of exact internal use intent ids selected only from the left side of the allowed use intents list.
-
-Language rules:
-- Field names stay English through the JSON keys.
-- Natural-language field values should be Chinese-first.
-- Keep professional visual terms in English when useful, such as wide angle perspective, telephoto compression, natural diffused light, color accent, low angle, centered.
-- Elements should look like "白发少女", "角饰", "黑色战术服", "蓝色弹药带", "户外街道", "废墟拱门"; never like "风吹发丝", "低机位", "动态姿势", "戏剧性", "pose ref".
-- Do not invent tags.
-- If a tag is uncertain, omit it.
-- tags and use_intents may be empty arrays when no supported selection exists.
-- Analytical natural-language fields must be non-empty strings. `suggest_title` may be empty only when the original title is already informative. For low-information images, describe available visible facts directly instead of leaving analytical fields blank.
-- Pipeline tags may be selected directly in tags. Use `reference` for broadly reusable visual material, `training data` for clear, consistently readable visual material without claiming rights, `final select` only for a visually polished candidate rather than an actual project approval, and `test shot` for visible test or setup imagery. Select other pipeline tags only when supported by the image.
-- Do not output pipeline tag names inside use_intents. For example, output "pose_reference", not "pose ref"; output "aigc_prompt_reference", not "prompt ref".
-- Do not repeat any tag or use_intent.
+Natural-language values are Chinese-first. Keep professional visual terms in English when useful. Describe available facts for low-information images instead of leaving analytical fields blank. Tags and use intents must come only from the lists supplied below and may be empty.
 
 Allowed taxonomy:
 {{taxonomy}}

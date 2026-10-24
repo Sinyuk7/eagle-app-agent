@@ -42,21 +42,15 @@ class CommercialEditorialTests(unittest.TestCase):
 
         self.assertNotIn('"visible_text"', default_prompt)
         self.assertNotIn('"commercial_format_confidence"', default_prompt)
-        self.assertIn('"visible_text"', editorial_prompt)
-        self.assertIn('"brand_evidence"', editorial_prompt)
-        self.assertIn('"product_categories"', editorial_prompt)
-        self.assertIn('"commercial_format_confidence"', editorial_prompt)
+        self.assertIn("visible_text:", editorial_prompt)
+        self.assertIn("brand_evidence:", editorial_prompt)
+        self.assertIn("commercial_format_confidence:", editorial_prompt)
 
     def test_title_rules_identify_uninformative_names_in_both_profiles(self):
         for profile in ("default", "editorial"):
             prompt = render_user_prompt(self.taxonomy, profile=profile)
-            self.assertIn('"收藏到 Campaign"', prompt)
-            self.assertIn('"搜索结果页面"', prompt)
-            self.assertIn('"Celine"', prompt)
-            self.assertIn(
-                "Return an empty string only when the original title is already informative",
-                prompt,
-            )
+            self.assertIn("generic, temporary, or meaningless", prompt)
+            self.assertIn("empty string", prompt)
 
     def test_legacy_payload_keeps_default_commercial_values_out_of_annotation(self):
         analysis = normalize_analysis_json(
@@ -225,11 +219,8 @@ class CommercialEditorialTests(unittest.TestCase):
         self.assertNotIn("commercial_format:", default_prompt)
         self.assertIn("commercial_format: campaign", editorial_prompt)
         self.assertIn("channel: social media | ooh", editorial_prompt)
-        self.assertIn("Pipeline tags may be selected directly", editorial_prompt)
-        self.assertIn(
-            "commercial_format supports multiple compatible tags", editorial_prompt
-        )
-        self.assertIn("Facet cardinality is evidence-driven", editorial_prompt)
+        self.assertIn("pipeline tags belong in tags", editorial_prompt)
+        self.assertIn("Metadata alone never confirms", editorial_prompt)
 
     def test_output_protocol_is_kept_in_system_prompt_only(self):
         for profile in ("default", "editorial"):

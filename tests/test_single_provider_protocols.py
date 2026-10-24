@@ -72,6 +72,8 @@ class SingleProviderProtocolTests(unittest.TestCase):
             schema = moodtag_json_schema(profile)
             self.assertIn("suggest_title", schema["required"])
             self.assertEqual(schema["properties"]["suggest_title"]["type"], "string")
+            self.assertTrue(schema["properties"]["suggest_title"]["description"])
+            self.assertTrue(schema["properties"]["elements"]["description"])
 
     def test_image_destination_labels_local_api_and_remote_service(self):
         local = cli.image_destination_message(
@@ -177,6 +179,29 @@ class SingleProviderProtocolTests(unittest.TestCase):
         self.assertEqual(payload["input"][0]["role"], "developer")
         self.assertEqual(payload["input"][1]["content"][1]["detail"], "auto")
 
+    def test_prompt_cache_prefix_excludes_per_image_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "image.jpg"
+            image.write_bytes(b"jpeg")
+            payload = VisionClient(
+                protocol="responses",
+                base_url="https://api.openai.com/v1",
+                model="gpt-6.1-sol",
+                api_key="custom-secret",
+            ).build_payload(
+                image,
+                {"style": ["portrait"]},
+                original_title="Per image title",
+                source_url="https://example.test/source?secret=value",
+            )
+        stable = payload["input"][0]["content"][0]["text"]
+        dynamic = payload["input"][1]["content"][0]["text"]
+        self.assertNotIn("Per image title", stable)
+        self.assertNotIn("example.test/source", stable)
+        self.assertIn("Per image title", dynamic)
+        self.assertIn("https://example.test/source", dynamic)
+        self.assertNotIn("secret", dynamic)
+
     def test_custom_endpoint_does_not_assume_prompt_cache_support(self):
         with tempfile.TemporaryDirectory() as directory:
             image = Path(directory) / "image.jpg"
@@ -190,21 +215,6 @@ class SingleProviderProtocolTests(unittest.TestCase):
             payload = client.build_payload(image, {})
         self.assertNotIn("prompt_cache_options", payload)
         self.assertEqual(payload["input"][0]["role"], "system")
-
-    def test_json_mode_can_be_disabled_for_both_protocols(self):
-        with tempfile.TemporaryDirectory() as directory:
-            image = Path(directory) / "image.jpg"
-            image.write_bytes(b"jpeg")
-            for protocol in ("chat", "responses"):
-                payload = VisionClient(
-                    protocol=protocol,
-                    base_url="https://example.test/v1",
-                    model="vision",
-                    api_key="custom-secret",
-                    response_format=False,
-                ).build_payload(image, {})
-                self.assertNotIn("response_format", payload)
-                self.assertNotIn("text", payload)
 
     def test_response_extractors_keep_order_and_reject_empty(self):
         chat = {

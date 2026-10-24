@@ -34,11 +34,11 @@ Moodtag SHALL require structured Schema output for every supported provider requ
 - **THEN** the request fails with an explicit error and does not silently downgrade to JSON Object or prompt-only parsing
 
 ### Requirement: Per-image metadata remains cache-safe
-Original title and sanitized source URL SHALL be supplied as per-image supplemental context after stable cacheable prompt instructions.
+Original title and sanitized source URL SHALL be supplied as per-image supplemental context after stable cacheable prompt instructions. The rendered Profile Prompt, including task-level Taxonomy and Use Intents, SHALL remain in the stable prefix; stable content does not have to be placed in the System role.
 
 #### Scenario: Explicit prompt cache request
 - **WHEN** a Remote request uses explicit prompt caching
-- **THEN** system/profile instructions and taxonomy remain in the stable prefix while title, source URL, and image are placed in the per-image user message
+- **THEN** the system principles and rendered Profile Prompt containing task instructions, Taxonomy, and Use Intents appear before the cache breakpoint while title, source URL, and image appear in the per-image user message
 
 ### Requirement: Suggest title remains strict
 `suggest_title` SHALL be required and typed as a string for both profiles; an empty string SHALL mean that the existing title is preserved.
