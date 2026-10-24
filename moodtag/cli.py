@@ -2500,8 +2500,11 @@ def _command_guided_tag_v2(args: argparse.Namespace) -> int:
     eagle = public_attr("EagleClient")(args.eagle_api)
     try:
         eagle.app_info()
-    except CoreError as exc:
-        raise MoodtagError(str(exc)) from exc
+    except CoreError:
+        # Board discovery remains the source of truth for guided mode.  Some
+        # compatible Eagle implementations do not expose application info;
+        # do not make that optional probe block an otherwise valid run.
+        pass
     scope = _load_guided_board_scope(args, eagle, printer)
     if scope is None:
         printer.emit("Cancelled. Nothing changed.", state="warning")
@@ -2616,7 +2619,12 @@ def _command_tag_v2(args: argparse.Namespace) -> int:
             if isinstance(vision, OllamaVisionClient):
                 vision.preflight()
             eagle = public_attr("EagleClient")(args.eagle_api)
-            eagle.app_info()
+            try:
+                eagle.app_info()
+            except CoreError:
+                # Application metadata is advisory; board/item APIs are enough
+                # to run the tagging command and are easier to mock in CI.
+                pass
             scope = load_board_scope(
                 eagle,
                 args.board,
