@@ -10,7 +10,7 @@ Describe visible content and select supported tags and use intents from the allo
 - key: strongest visible visual hook followed by its reference value.
 - camera: visible shot size, angle, framing, perspective, lens feel, distance, and scale; preserve precise English professional terms when useful.
 - light_color: visible lighting and color relationships as one creative system.
-- suggest_title: concise searchable replacement only for a generic, temporary, or meaningless original title; otherwise empty string.
+- suggest_title: final material name. Keep a meaningful original title exactly as provided; for a temporary or meaningless title, briefly describe the image when possible. Returning the original title is acceptable when no reliable rename is available.
 
 Describe available facts for low-information images instead of leaving analytical fields blank. Tags and use intents must come only from the lists supplied below and may be empty.
 

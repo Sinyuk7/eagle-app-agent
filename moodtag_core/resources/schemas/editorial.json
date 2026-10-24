@@ -31,7 +31,8 @@
     },
     "suggest_title": {
       "type": "string",
-      "description": "Searchable replacement title only when the original title is generic or meaningless; empty string preserves it."
+      "minLength": 1,
+      "description": "Final non-empty material name; return a meaningful original title exactly, or create a short descriptive name for a meaningless title."
     },
     "tags": {
       "type": "array",

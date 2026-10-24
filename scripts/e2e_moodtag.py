@@ -111,7 +111,7 @@ class VisionStub:
                     "key": "核心是确认模型 JSON 能拆成自然语言备注和 Eagle tags。",
                     "camera": "中景平视构图，standard lens feel，主体居中。",
                     "light_color": "soft test light 为主，neutral tone，整体稳定。",
-                    "suggest_title": "",
+                    "suggest_title": "测试素材",
                     "tags": ["photo", "portrait", "reference"],
                     "use_intents": ["lighting_reference", "pose_reference"],
                 }
@@ -123,7 +123,7 @@ class VisionStub:
                         "key": "",
                         "camera": "",
                         "light_color": "",
-                        "suggest_title": "",
+                        "suggest_title": "测试素材",
                         "tags": [],
                         "use_intents": [],
                     }

@@ -1140,14 +1140,31 @@ def compose_item_metadata(
 _INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
 
 
+def name_without_extension(name: str, extension: str) -> str:
+    clean = str(name or "").strip()
+    ext = str(extension or "").strip().lstrip(".")
+    if ext and clean.casefold().endswith(f".{ext}".casefold()):
+        return clean[: -(len(ext) + 1)]
+    return clean
+
+
 def validated_suggested_name(title: str, extension: str) -> str | None:
     clean = str(title or "").strip()
     if not clean or len(clean) > 180 or _INVALID_FILENAME_CHARS.search(clean):
         return None
-    if clean.endswith((".", " ")) or Path(clean).suffix:
+    if clean.endswith((".", " ")):
         return None
-    ext = str(extension or "").strip().lstrip(".")
-    return f"{clean}.{ext}" if ext else clean
+    return name_without_extension(clean, extension)
+
+
+def title_matches_item_name(title: str, name: str, extension: str) -> bool:
+    candidate = name_without_extension(title, extension)
+    current = str(name or "").strip()
+    if not candidate or not current:
+        return False
+    if candidate == name_without_extension(current, extension):
+        return True
+    return False
 
 
 def write_analysis_result(
@@ -1171,9 +1188,17 @@ def write_analysis_result(
     )
     proposed_name = None
     if latest.name == result.item.name and result.suggested_title:
-        proposed_name = validated_suggested_name(
-            result.suggested_title, result.item.ext
-        )
+        normalized_current = name_without_extension(latest.name, result.item.ext)
+        if title_matches_item_name(
+            result.suggested_title, latest.name, result.item.ext
+        ):
+            # Normalize names written by older versions that included ext.
+            if latest.name != normalized_current:
+                proposed_name = normalized_current
+        else:
+            proposed_name = validated_suggested_name(
+                result.suggested_title, result.item.ext
+            )
     update_fields: dict[str, Any] = {"tags": tags, "annotation": annotation}
     if proposed_name is not None:
         update_fields["name"] = proposed_name
@@ -1654,7 +1679,7 @@ def analyze_tag_item(
                 taxonomy,
                 retries=retries,
                 max_tags=max_tags,
-                original_title=item.name,
+                original_title=name_without_extension(item.name, item.ext),
                 source_url=item.url,
             )
             vision_ms = elapsed_ms_since(vision_started)
@@ -4498,7 +4523,10 @@ def main(argv: list[str] | None = None) -> int:
         if argv and argv[0] == "selected":
             argv = ["tag", "--selected", *argv[1:]]
         argv, _guided = rewrite_main_argv(argv)
-        parser = build_parser()
+        # Direct subcommands must use the persisted provider configuration too.
+        # The guided flow already seeded its parser from load_user_config();
+        # omitting it here makes `moodtag tag` appear unconfigured.
+        parser = build_parser(load_user_config())
         args = parser.parse_args(argv)
         return int(args.func(args) or 0)
     except MoodtagError as exc:

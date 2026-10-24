@@ -20,7 +20,7 @@ def legacy_payload() -> dict[str, object]:
         "key": "无品牌证据，黑白服装对比与大面积留白。",
         "camera": "半身平视，右侧留白。",
         "light_color": "柔和正面光，黑白中性色。",
-        "suggest_title": "",
+        "suggest_title": "测试素材",
         "tags": ["photo"],
         "use_intents": [],
     }
@@ -71,8 +71,11 @@ class CommercialEditorialTests(unittest.TestCase):
     def test_title_rules_identify_uninformative_names_in_both_profiles(self):
         for profile in ("default", "editorial"):
             prompt = render_user_prompt(self.taxonomy, profile=profile)
-            self.assertIn("generic, temporary, or meaningless", prompt)
-            self.assertIn("empty string", prompt)
+            self.assertIn("final material name", prompt)
+            self.assertTrue(
+                "return it exactly as provided" in prompt
+                or "original title exactly as provided" in prompt
+            )
 
     def test_legacy_payload_keeps_default_commercial_values_out_of_annotation(self):
         analysis = normalize_analysis_json(
@@ -180,12 +183,12 @@ class CommercialEditorialTests(unittest.TestCase):
         with self.assertRaisesRegex(CoreError, "commercial_format_confidence"):
             normalize_analysis_json(payload, taxonomy=self.taxonomy, max_tags=15)
 
-    def test_suggest_title_is_strict_but_may_be_empty(self):
+    def test_suggest_title_is_strict_and_non_empty(self):
         payload = legacy_payload()
-        payload["suggest_title"] = ""
+        payload["suggest_title"] = "测试素材"
         result = normalize_analysis_json(payload, taxonomy=self.taxonomy, max_tags=15)
-        self.assertEqual(result.suggest_title, "")
-        for invalid in (None, 42):
+        self.assertEqual(result.suggest_title, "测试素材")
+        for invalid in (None, 42, "", "  "):
             with (
                 self.subTest(invalid=invalid),
                 self.assertRaisesRegex(CoreError, "suggest_title"),

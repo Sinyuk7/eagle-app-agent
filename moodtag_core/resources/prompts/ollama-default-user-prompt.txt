@@ -12,7 +12,7 @@ Fields:
 - key: the strongest visible feature and its concrete reference value.
 - camera: visible framing, angle, perspective, placement, and scale.
 - light_color: visible lighting and relationships between dominant, supporting, and accent colors.
-- suggest_title: provide a concise replacement only when the original title is generic, temporary, or meaningless (for example, IMG_1259, IMG_1234, Clipboard, Untitled, or a number); otherwise return an empty string. Never infer a title from unsupported details.
+- suggest_title: final material name. Keep a meaningful original title exactly as provided; for a temporary or meaningless title, briefly describe the image when possible. Returning the original title is acceptable when no reliable rename is available.
 
 Tags:
 - Review relevant taxonomy facets independently and select all compatible tags clearly supported by the image, rather than stopping at one broad label.

@@ -124,6 +124,7 @@ class SingleProviderProtocolTests(unittest.TestCase):
             schema = moodtag_json_schema(profile)
             self.assertIn("suggest_title", schema["required"])
             self.assertEqual(schema["properties"]["suggest_title"]["type"], "string")
+            self.assertEqual(schema["properties"]["suggest_title"]["minLength"], 1)
             self.assertTrue(schema["properties"]["suggest_title"]["description"])
             self.assertTrue(schema["properties"]["elements"]["description"])
 
@@ -152,7 +153,7 @@ class SingleProviderProtocolTests(unittest.TestCase):
             "brand_evidence": [],
             "product_categories": [],
             "commercial_format_confidence": "not_assessed",
-            "suggest_title": "",
+            "suggest_title": "测试素材",
             "tags": [],
             "use_intents": [],
         }
@@ -627,7 +628,7 @@ class SingleProviderProtocolTests(unittest.TestCase):
                 "key": "x",
                 "camera": "x",
                 "light_color": "x",
-                "suggest_title": "",
+                "suggest_title": "测试素材",
                 "tags": [],
                 "use_intents": [],
             }

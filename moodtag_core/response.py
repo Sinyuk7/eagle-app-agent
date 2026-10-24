@@ -130,8 +130,8 @@ def normalize_analysis_json(
         data.get("commercial_format_confidence", "not_assessed")
     )
     suggest_title = data.get("suggest_title")
-    if not isinstance(suggest_title, str):
-        raise CoreError("Model result field suggest_title must be a string")
+    if not isinstance(suggest_title, str) or not collapse_lines(suggest_title).strip():
+        raise CoreError("Model result field suggest_title must be a non-empty string")
 
     raw_tags = data.get("tags", [])
     if not isinstance(raw_tags, list):

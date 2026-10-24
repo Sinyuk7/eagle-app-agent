@@ -43,6 +43,8 @@ def validate_json_schema(value: Any, schema: dict[str, Any], path: str = "$") ->
     }
     if expected in valid and not valid[expected](value):
         raise CoreError(f"Schema validation failed at {path}: expected {expected}")
+    if expected == "string" and len(value) < schema.get("minLength", 0):
+        raise CoreError(f"Schema validation failed at {path}: string is too short")
     if "enum" in schema and value not in schema["enum"]:
         raise CoreError(f"Schema validation failed at {path}: invalid value")
     if expected == "object":

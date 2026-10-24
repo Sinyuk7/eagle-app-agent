@@ -118,7 +118,49 @@ class MetadataSafetyTests(unittest.TestCase):
                 updates.append((item_id, kwargs))
 
         write_analysis_result(Eagle(), result)
-        self.assertEqual(updates[0][1]["name"], "黑色皮革夹克.jpg")
+        self.assertEqual(updates[0][1]["name"], "黑色皮革夹克")
+
+    def test_write_removes_model_returned_extension(self):
+        item = EagleItem("1", "1.jpg", "jpg", [], [], "")
+        result = TagItemResult(
+            index=1,
+            item=item,
+            tags=[],
+            annotation=build_annotation_block(analysis()),
+            suggested_title="黑色皮革夹克.jpg",
+        )
+        updates = []
+
+        class Eagle:
+            def item_info(self, _item_id):
+                return item
+
+            def update_item(self, item_id, **kwargs):
+                updates.append(kwargs)
+
+        write_analysis_result(Eagle(), result)
+        self.assertEqual(updates[0]["name"], "黑色皮革夹克")
+
+    def test_write_normalizes_current_name_without_extension(self):
+        item = EagleItem("1", "1.jpg", "jpg", [], [], "")
+        result = TagItemResult(
+            index=1,
+            item=item,
+            tags=[],
+            annotation=build_annotation_block(analysis()),
+            suggested_title="1.jpg",
+        )
+        updates = []
+
+        class Eagle:
+            def item_info(self, _item_id):
+                return item
+
+            def update_item(self, item_id, **kwargs):
+                updates.append(kwargs)
+
+        write_analysis_result(Eagle(), result)
+        self.assertEqual(updates[0]["name"], "1")
 
     def test_write_skips_rename_when_name_changed_or_suggestion_invalid(self):
         analyzed = EagleItem("1", "1.jpg", "jpg", [], [], "")

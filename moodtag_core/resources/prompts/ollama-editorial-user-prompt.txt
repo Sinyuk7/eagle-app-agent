@@ -16,7 +16,7 @@ Fields:
 - brand_evidence: identifiable visible logo, wordmark, or product mark and its location. Empty when none is recognizable. Do not infer brands from styling or metadata.
 - product_categories: generic product categories identifiable in the image; empty when none is clear.
 - commercial_format_confidence: use confirmed only with explicit visual evidence, probable when visual evidence and consistent supplemental context support a format, otherwise not_assessed. Metadata alone never confirms a format.
-- suggest_title: provide a concise searchable replacement only when the original title is generic, temporary, or meaningless (for example, IMG_1259, IMG_1234, Clipboard, Untitled, or a number). Preserve meaningful titles as-is with an empty string. Do not invent brands or collections; omit file extensions.
+- suggest_title: final material name. Keep a meaningful original title exactly as provided; for a temporary or meaningless title, briefly describe the image when possible. Returning the original title is acceptable when no reliable rename is available.
 
 Tags:
 - Review relevant taxonomy facets independently: medium, subject, genre, commercial format, channel, visual role, layout, product category, brand visibility, composition, pose, lighting, color, visual focus, wardrobe, environment, and pipeline.

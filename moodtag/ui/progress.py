@@ -63,7 +63,10 @@ class Progress:
                     file=self.printer.stream,
                     # Make the throughput unit explicit: this is completed
                     # images per second, not per-request API latency.
-                    stats="(~{eta}, {rate:.1f} images/s)",
+                    # alive-progress exposes rate as a preformatted string in
+                    # current releases; numeric format specs crash its render
+                    # thread on Python 3.13.
+                    stats="(~{eta}, {rate} images/s)",
                 )
                 self._update = self._bar.__enter__()
             except ImportError:

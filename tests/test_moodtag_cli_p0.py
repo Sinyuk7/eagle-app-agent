@@ -153,6 +153,45 @@ class MoodtagCliP0Tests(unittest.TestCase):
 
         self.assertEqual(saved["profile"], "editorial")
 
+    def test_direct_tag_command_loads_persisted_model_configuration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "config.json"
+            config.write_text(
+                '{"base_url":"https://example.test/v1", "model":"gpt-6.1-sol", "source":"openai-compatible"}\n',
+                encoding="utf-8",
+            )
+            original_build_parser = moodtag.cli.build_parser
+            seen: list[dict[str, str]] = []
+
+            def build_parser(config_value=None):
+                seen.append(dict(config_value or {}))
+                return original_build_parser(config_value)
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"MOODTAG_CONFIG": str(config), "MOODTAG_API_KEY": "test-key"},
+                    clear=True,
+                ),
+                mock.patch("moodtag.cli.load_env_defaults"),
+                mock.patch("moodtag.cli.build_parser", side_effect=build_parser),
+                mock.patch("moodtag.cli.EagleClient", return_value=_Eagle()),
+                mock.patch(
+                    "moodtag.cli.resolve_item_scope",
+                    return_value=type(
+                        "Resolved", (), {"items": [], "source": "board"}
+                    )(),
+                ),
+            ):
+                self.assertEqual(
+                    moodtag.main(
+                        ["tag", "--board", "board", "--mock-model", "--plain"]
+                    ),
+                    0,
+                )
+
+            self.assertTrue(any(item.get("model") == "gpt-6.1-sol" for item in seen))
+
     def test_unknown_profile_fails_before_eagle(self):
         stderr = io.StringIO()
         with (
