@@ -29,7 +29,7 @@ Moodtag has two semantic profiles, each represented by a system and user prompt.
 
 4. **Stable Prefix is not synonymous with System Prompt.** The System Prompt carries profile-level analysis principles. The rendered Stable Profile Prompt carries task instructions plus the task's Taxonomy and Use Intents. Explicit-cache requests place both together in the stable Developer prefix and put original title, sanitized source URL, and image in the following per-image User message. Non-cached requests retain equivalent semantic content in their existing system/user arrangement.
 
-5. **Validation remains layered.** Keep provider response parsing and Ollama schema validation. Require `suggest_title` as a string everywhere; empty string is valid and means preserve the existing name. Do not add compatibility defaults for missing fields.
+5. **Validation remains layered.** Keep provider response parsing and Ollama schema validation. Require `suggest_title` as a non-empty string everywhere. Do not add compatibility defaults for missing fields.
 
 ## Risks / Trade-offs
 

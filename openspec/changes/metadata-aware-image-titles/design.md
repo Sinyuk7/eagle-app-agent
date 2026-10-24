@@ -8,7 +8,7 @@ The change is intentionally narrow: one model invocation per image, both profile
 
 **Goals:**
 - Supply per-item name and optional source URL in user prompt context for every provider.
-- Establish a strict `suggest_title` response contract in both profiles, where empty means preserve and non-empty means a replacement title without extension.
+- Establish a strict `suggest_title` response contract in both profiles, where the returned title is always non-empty; meaningful names are returned exactly and meaningless names receive a replacement title.
 - Let metadata help contextual interpretation while maintaining visual evidence boundaries.
 - Safely apply valid rename suggestions with the existing metadata write, preserving extension and user edits made during analysis.
 - Keep suggestion and source metadata out of annotation text.
@@ -31,17 +31,17 @@ Alternative: put dynamic values in system prompts. Rejected because they vary pe
 
 Add `suggest_title` to both profile JSON templates and schemas and to `MoodtagAnalysis`; validate it as a string with no fallback for a missing value. Empty string is valid and means preserve the current title. Update mocks, fixtures, and tests to emit the field. Keep it outside `ANNOTATION_FIELDS` and annotation labels so it cannot appear in Eagle descriptions.
 
-Alternative: default missing responses to empty for backward compatibility. Rejected because this is an intentional output-contract upgrade and the user explicitly wants strict validation.
+Alternative: default missing responses to the original title in the parser. Rejected because the model must explicitly classify and return the final title.
 
 ### Keep contextual and visual evidence distinct
 
-Refine only the relevant prompt rules. Image content remains primary; metadata may inform contextual interpretation and support `probable` commercial format confidence when consistent with the image. `visible_text` and `brand_evidence` remain pixel-grounded, and `confirmed` format confidence requires clear visual evidence. Remove or revise conflicting repetitions rather than appending a contradictory rule. The general non-empty analytical-field rule must explicitly exempt `suggest_title`, whose empty string is meaningful.
+Refine only the relevant prompt rules. Image content remains primary; metadata may inform contextual interpretation and support `probable` commercial format confidence when consistent with the image. `visible_text` and `brand_evidence` remain pixel-grounded, and `confirmed` format confidence requires clear visual evidence. Remove or revise conflicting repetitions rather than appending a contradictory rule. `suggest_title` must always be non-empty and must preserve meaningful original names exactly.
 
 Alternative: make all fields strictly visual-only. Rejected because it discards useful title/source context. Alternative: accept metadata as proof. Rejected because it would turn contextual claims into unsupported visual evidence.
 
 ### Rename conditionally in the existing V2 metadata update
 
-Carry the analyzed original name, extension, and suggestion to the existing write boundary. Re-read latest item metadata as today. Include a sanitized suggested title plus the original extension as `name` only if the suggestion is non-empty and valid and the latest name still equals the analyzed name; otherwise omit `name` but continue valid tag and annotation writes. Use `/api/v2/item/update` for this write and include only fields intended for update. Do not claim transaction-level atomicity beyond the API's single-request behavior.
+Carry the analyzed original name, extension, and returned title to the existing write boundary. Re-read latest item metadata as today. Include a sanitized new title plus the original extension as `name` only if the title differs from the current name, is valid, and the latest name still equals the analyzed name; otherwise omit `name` but continue valid tag and annotation writes. Use `/api/v2/item/update` for this write and include only fields intended for update. Do not claim transaction-level atomicity beyond the API's single-request behavior.
 
 Alternative: make a separate rename request. Rejected because it can leave name and analysis metadata partially updated and adds a request. Alternative: migrate every Eagle endpoint. Rejected as unrelated scope.
 

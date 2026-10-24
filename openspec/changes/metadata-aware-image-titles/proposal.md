@@ -5,7 +5,7 @@ Moodtag currently analyzes image pixels without the Eagle item's existing title 
 ## What Changes
 
 - Pass each Eagle item's original name and optional source URL as per-image user-prompt context to every supported provider.
-- Require both `default` and `editorial` model contracts to return `suggest_title`; an empty string means preserve the existing name, and a non-empty title omits the extension.
+- Require both `default` and `editorial` model contracts to return a non-empty `suggest_title`; meaningful names are returned exactly, and generated titles omit the extension.
 - Allow metadata to inform contextual interpretation while keeping visible text and brand evidence grounded in pixels, and requiring visual evidence for confirmed commercial-format confidence.
 - Conditionally rename through Eagle V2 item update, preserving the existing extension and avoiding overwriting a name changed after analysis.
 - Keep title suggestions and input metadata out of Eagle annotation text; leave taxonomy, CLI controls, and unrelated Eagle endpoints unchanged.

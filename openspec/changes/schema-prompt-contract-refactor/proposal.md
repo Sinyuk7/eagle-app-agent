@@ -10,7 +10,7 @@ Moodtag currently repeats output-format instructions and field semantics across 
 - Preserve concise semantic rules for visible evidence, metadata boundaries, searchable elements, brand evidence, commercial format, and `suggest_title`.
 - Keep Remote Chat, Responses, and Ollama on their provider-specific structured-output transports using the shared Schema.
 - **BREAKING** Remove all No Response Format CLI options, environment variables, constructor controls, conditional branches, and related tests; do not provide JSON Object or prompt-only fallback.
-- Keep `suggest_title` required as a string; an empty string means preserve the existing title, and missing or incorrectly typed values remain invalid.
+- Keep `suggest_title` required as a non-empty string; meaningful names are returned exactly, and missing or incorrectly typed values remain invalid.
 - Preserve explicit prompt-cache separation between stable instructions and per-image metadata.
 
 ## Capabilities

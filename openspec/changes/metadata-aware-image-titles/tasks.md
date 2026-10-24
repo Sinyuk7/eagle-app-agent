@@ -1,13 +1,13 @@
 ## 1. Analysis context and prompt rules
 
 - [x] 1.1 Carry Eagle item URL alongside name through parsing and per-item analysis; pass both as bounded supplemental context to remote and Ollama providers in the user prompt.
-- [x] 1.2 Refine only relevant default and editorial prompt rules for metadata hierarchy, field-specific evidence boundaries, and empty `suggest_title`; remove conflicting duplicate restrictions.
+- [x] 1.2 Refine only relevant default and editorial prompt rules for metadata hierarchy, field-specific evidence boundaries, and non-empty `suggest_title`; remove conflicting duplicate restrictions.
 - [x] 1.3 Add prompt/provider tests proving per-item name and optional URL are supplied without URL fetching and both provider paths receive the same context.
 
 ## 2. Strict title response contract
 
 - [x] 2.1 Add required `suggest_title` to both profile templates and JSON schemas, shared analysis result, and strict response normalization without a missing-field fallback.
-- [x] 2.2 Update mocks, fixtures, and response tests for required string validation, valid empty values, and non-empty extension-free suggestions.
+- [x] 2.2 Update mocks, fixtures, and response tests for required non-empty string validation and extension-free generated suggestions.
 - [x] 2.3 Verify annotation formatting and legacy six-field annotation handling remain unchanged and never serialize suggestion or source metadata.
 
 ## 3. Safe Eagle V2 write

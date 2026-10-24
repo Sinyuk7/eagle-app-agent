@@ -1,11 +1,11 @@
 ## ADDED Requirements
 
 ### Requirement: Both profiles return a strict title suggestion
-The system SHALL require `suggest_title` as a string in both `default` and `editorial` analysis responses. An empty string SHALL mean that the existing name is meaningful enough to preserve; a non-empty value SHALL be a concise, searchable replacement title without a file extension. Missing or non-string values SHALL fail normal schema or response validation.
+The system SHALL require `suggest_title` as a non-empty string in both `default` and `editorial` analysis responses. A meaningful existing name SHALL be returned exactly; a meaningless existing name SHALL receive a concise, searchable replacement title without a file extension. Missing or non-string values SHALL fail normal schema or response validation.
 
 #### Scenario: Existing name is meaningful
 - **WHEN** the original name already provides useful identification or search context
-- **THEN** the model returns `suggest_title` as an empty string
+- **THEN** the model returns the original meaningful title exactly
 
 #### Scenario: Existing name is generic or meaningless
 - **WHEN** the original name is generic, temporary, or meaningless and image content supports a useful title
@@ -23,7 +23,7 @@ The system SHALL use `suggest_title` only for conditional item renaming and SHAL
 - **THEN** the generated annotation retains the existing annotation-field contract and contains no title suggestion or input metadata
 
 ### Requirement: Rename safely during the existing write operation
-When writing analysis results, the system SHALL include a valid non-empty suggested title as the Eagle item's `name` while preserving the item's original extension. The system SHALL apply the rename only if the latest item name still matches the name analyzed. It SHALL omit `name` from the update when the suggestion is empty, invalid, or the latest name has changed. Tags and annotation SHALL continue through the existing write flow.
+When writing analysis results, the system SHALL include a valid changed title as the Eagle item's `name` while preserving the item's original extension. The system SHALL apply the rename only if the latest item name still matches the name analyzed. It SHALL omit `name` from the update when the returned title is unchanged, invalid, or the latest name has changed. Tags and annotation SHALL continue through the existing write flow.
 
 #### Scenario: Write a valid title suggestion
 - **WHEN** write mode is enabled, the suggestion is valid and non-empty, and the latest name matches the analyzed name
@@ -34,7 +34,7 @@ When writing analysis results, the system SHALL include a valid non-empty sugges
 - **THEN** the update omits `name` and continues writing valid tags and annotation
 
 #### Scenario: No rename is suggested or suggestion is invalid
-- **WHEN** the suggestion is empty or fails title validation
+- **WHEN** the returned title is missing or invalid or fails title validation
 - **THEN** the update omits `name` and continues writing valid tags and annotation
 
 #### Scenario: Dry run

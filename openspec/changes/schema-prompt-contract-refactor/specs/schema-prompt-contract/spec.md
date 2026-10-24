@@ -41,7 +41,7 @@ Original title and sanitized source URL SHALL be supplied as per-image supplemen
 - **THEN** the system principles and rendered Profile Prompt containing task instructions, Taxonomy, and Use Intents appear before the cache breakpoint while title, source URL, and image appear in the per-image user message
 
 ### Requirement: Suggest title remains strict
-`suggest_title` SHALL be required and typed as a string for both profiles; an empty string SHALL mean that the existing title is preserved.
+`suggest_title` SHALL be required and typed as a non-empty string for both profiles; a meaningful existing title SHALL be returned exactly.
 
 #### Scenario: Invalid title field is rejected
 - **WHEN** a response omits `suggest_title` or supplies a non-string value
