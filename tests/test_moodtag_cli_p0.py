@@ -19,6 +19,54 @@ class _Eagle:
 
 
 class MoodtagCliP0Tests(unittest.TestCase):
+    def test_help_is_localized_and_does_not_load_config_or_environment(self):
+        for language, expected in (
+            ("zh", "快速开始："),
+            ("en", "Quick start:"),
+        ):
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"MOODTAG_LANG": language}, clear=True),
+                mock.patch("moodtag.cli.load_user_config", side_effect=AssertionError),
+                mock.patch("moodtag.cli.load_env_defaults", side_effect=AssertionError),
+                redirect_stdout(stdout),
+            ):
+                with self.assertRaises(SystemExit) as result:
+                    moodtag.main(["--help"])
+            self.assertEqual(result.exception.code, 0)
+            self.assertIn(expected, stdout.getvalue())
+            self.assertIn("moodtag config model", stdout.getvalue())
+
+    def test_tag_help_groups_options_and_localizes_descriptions(self):
+        stdout = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, {"MOODTAG_LANG": "zh"}, clear=True),
+            mock.patch("moodtag.cli.load_user_config", side_effect=AssertionError),
+            mock.patch("moodtag.cli.load_env_defaults", side_effect=AssertionError),
+            redirect_stdout(stdout),
+        ):
+            with self.assertRaises(SystemExit) as result:
+                moodtag.main(["tag", "--help"])
+        self.assertEqual(result.exception.code, 0)
+        self.assertIn("处理范围:", stdout.getvalue())
+        self.assertIn("筛选条件:", stdout.getvalue())
+        self.assertIn("写入行为:", stdout.getvalue())
+        self.assertIn("高级选项:", stdout.getvalue())
+
+    def test_config_help_does_not_load_config_or_environment(self):
+        stdout = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, {"MOODTAG_LANG": "zh"}, clear=True),
+            mock.patch("moodtag.cli.load_user_config", side_effect=AssertionError),
+            mock.patch("moodtag.cli.load_env_defaults", side_effect=AssertionError),
+            redirect_stdout(stdout),
+        ):
+            with self.assertRaises(SystemExit) as result:
+                moodtag.main(["config", "--help"])
+        self.assertEqual(result.exception.code, 0)
+        self.assertIn("{profile,model,reset,show}", stdout.getvalue())
+        self.assertIn("配置或切换模型", stdout.getvalue())
+
     def test_app_info_uses_documented_eagle_endpoint(self):
         payload = {"status": "success", "data": {"version": "4.0.0"}}
         with mock.patch("moodtag.cli.http_request", return_value=payload) as request:

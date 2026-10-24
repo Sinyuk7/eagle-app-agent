@@ -3866,39 +3866,54 @@ def command_config_reset(args: argparse.Namespace) -> int:
     return 0
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(user_config: dict[str, str] | None = None) -> argparse.ArgumentParser:
+    if user_config is None:
+        user_config = {}
     parser = argparse.ArgumentParser(
         prog="moodtag",
         usage=(
-            "moodtag <board-url-or-id>\n"
-            "       moodtag [--help|help]\n"
-            "       moodtag config [profile|model|reset]\n"
-            "       moodtag {status,tag,brief,export-context,reset,config} ..."
+            "moodtag [--help]\nmoodtag <board-url-or-id>\nmoodtag <command> [options]"
         ),
         description=(
-            "Primary flow:\n"
-            "  moodtag <board-url-or-id>\n\n"
-            "What it does:\n"
-            "  resolve board -> check setup -> show summary -> confirm -> write\n\n"
-            "Support:\n"
-            "  moodtag --help\n"
-            "  moodtag config\n"
+            f"{tr('Quick start:', '快速开始：')}\n"
+            f"  {tr('Start Eagle first.', '请先启动 Eagle。')}\n"
+            f"  moodtag  {tr('Open the interactive menu.', '进入交互首页。')}\n"
+            f"  moodtag <board-url-or-id>  {tr('Work with a folder.', '处理指定文件夹。')}\n\n"
+            f"{tr('The interactive menu can use a folder, selected items, or the entire library.', '交互首页可选择文件夹、当前选中项或整个图库。')}\n"
+            f"{tr('Moodtag guides model setup when needed. Review the summary and confirm before the interactive flow writes to Eagle.', '首次使用时 Moodtag 会引导配置模型；交互流程会先显示摘要，确认后再写入 Eagle。')}\n\n"
+            f"{tr('Common commands:', '常用命令：')}\n"
+            f"  moodtag status --board <folder>  {tr('Check tagging status', '查看标注状态')}\n"
+            f"  moodtag config  {tr('Show current configuration', '查看当前配置')}\n"
+            f"  moodtag config model  {tr('Set up or change the model', '配置或切换模型')}\n\n"
+            f"{tr('More help:', '更多帮助：')}\n"
+            "  moodtag config --help\n"
+            "  moodtag tag --help"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    sub = parser.add_subparsers(dest="command", required=True)
-    user_config = load_user_config()
+    sub = parser.add_subparsers(
+        dest="command",
+        title=tr("Commands", "命令"),
+        description=tr(
+            "Use a command for status, configuration, or advanced workflows.",
+            "使用命令查看状态、配置或运行进阶流程。",
+        ),
+    )
 
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument(
             "--board",
             required=False,
             default="",
-            help="Eagle folder URL or ID (name/path also accepted)",
+            help=tr(
+                "Eagle folder URL or ID (name/path also accepted)",
+                "Eagle 文件夹 URL 或 ID（也支持名称或路径）",
+            ),
         )
         p.add_argument(
             "--eagle-api",
             default=user_config.get("eagle_api", DEFAULT_EAGLE_API),
+            help=argparse.SUPPRESS,
         )
         p.add_argument(
             "--max-board-items",
@@ -3907,59 +3922,89 @@ def build_parser() -> argparse.ArgumentParser:
                 "MOODTAG_MAX_BOARD_ITEMS", DEFAULT_MAX_BOARD_ITEMS, minimum=-1
             ),
             help=(
-                "Abort when recursive board scope exceeds this many unique items "
-                "(default: 9999; -1 disables)"
+                tr(
+                    "Abort when recursive board scope exceeds this many unique items",
+                    "递归处理的唯一素材超过此数量时停止",
+                )
+                + f" ({tr('default: 9999; -1 disables', '默认：9999；-1 表示不限制')})"
             ),
         )
         p.add_argument(
             "--no-recursive",
             action="store_true",
-            help="Only use the selected Eagle folder, excluding child folders",
+            help=tr(
+                "Only use this folder, excluding child folders",
+                "仅处理当前文件夹，不包含子文件夹",
+            ),
         )
 
-    status = sub.add_parser("status", help="Show board tagging status")
+    status = sub.add_parser(
+        "status", help=tr("Show board tagging status", "查看标注状态")
+    )
     common(status)
-    status.add_argument("--verbose", action="store_true")
+    status.add_argument(
+        "--verbose", action="store_true", help=tr("Show item details", "显示素材详情")
+    )
     status.set_defaults(func=command_status)
 
-    tag = sub.add_parser("tag", help="Analyze pending board items")
+    tag = sub.add_parser("tag", help=tr("Analyze pending items", "分析待处理素材"))
     common(tag)
-    tag.add_argument(
+    target = tag.add_argument_group(tr("Target", "处理范围"))
+    target.add_argument(
         "--selected",
         action="store_true",
-        help="Use Eagle's current selected items as a fixed scope snapshot",
+        help=tr("Use items currently selected in Eagle", "处理 Eagle 当前选中项"),
     )
-    tag.add_argument(
+    target.add_argument(
         "--library",
         action="store_true",
-        help="Use the entire Eagle library as the scope",
+        help=tr("Use the entire Eagle library", "处理整个 Eagle 图库"),
     )
-    tag.add_argument(
+    selection = tag.add_argument_group(tr("Filters", "筛选条件"))
+    selection.add_argument(
         "--tag",
         dest="tags",
         action="append",
         default=[],
-        help="Require an existing Eagle tag; repeat to require all tags",
+        help=tr(
+            "Filter by existing Eagle tags; repeat to require all",
+            "按 Eagle 已有标签筛选；可重复指定，需同时匹配",
+        ),
     )
-    tag.add_argument(
+    selection.add_argument(
         "--rating",
         type=int,
-        help="Filter by Eagle rating (0–5; exact match)",
+        help=tr("Filter by exact Eagle rating (0–5)", "按 Eagle 评分精确筛选（0–5）"),
     )
-    tag.add_argument(
+    selection.add_argument(
         "--shape",
         choices=EAGLE_SHAPES,
-        help="Filter by Eagle-native image shape",
+        help=tr("Filter by image shape", "按图片形状筛选"),
     )
-    tag.add_argument("--write", action="store_true", help="Actually update Eagle")
-    tag.add_argument("--force", action="store_true", help="Reprocess existing notes")
-    tag.add_argument(
+    execution = tag.add_argument_group(tr("Write behavior", "写入行为"))
+    execution.add_argument(
+        "--write",
+        action="store_true",
+        help=tr("Write results to Eagle", "将结果写入 Eagle"),
+    )
+    execution.add_argument(
+        "--force",
+        action="store_true",
+        help=tr(
+            "Reprocess items with existing Moodtag descriptions",
+            "重新处理已有 Moodtag 描述的素材",
+        ),
+    )
+    execution.add_argument(
         "--profile",
         default=user_config.get("profile", DEFAULT_PROFILE) or DEFAULT_PROFILE,
-        help="Tagging style to use (default: editorial)",
+        help=tr("Tagging style (default: editorial)", "标注风格（默认：editorial）"),
     )
-    tag.add_argument(
-        "--mock-model", action="store_true", help="Use deterministic mock model"
+    advanced = tag.add_argument_group(tr("Advanced options", "高级选项"))
+    advanced.add_argument(
+        "--mock-model",
+        action="store_true",
+        help=tr("Use deterministic mock model", "使用确定性模拟模型"),
     )
     tag.set_defaults(
         base_url=user_config.get("base_url", ""),
@@ -3972,12 +4017,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         ollama_preset=user_config.get("ollama_preset", "qwen-instruct"),
     )
-    tag.add_argument(
+    advanced.add_argument(
         "--image-edge",
         type=int,
         default=env_int("MOODTAG_IMAGE_EDGE", DEFAULT_IMAGE_EDGE, minimum=256),
     )
-    tag.add_argument(
+    advanced.add_argument(
         "--concurrency",
         type=int,
         default=env_int(
@@ -3985,49 +4030,59 @@ def build_parser() -> argparse.ArgumentParser:
             1 if user_config.get("source") == "ollama" else DEFAULT_CONCURRENCY,
             minimum=1,
         ),
-        help="Number of image analysis requests to run in parallel",
+        help=tr("Parallel image analysis requests", "并行图片分析请求数"),
     )
-    tag.add_argument(
+    advanced.add_argument(
         "--max-tags",
         type=int,
         default=env_int("MOODTAG_MAX_TAGS", DEFAULT_MAX_TAGS, minimum=1),
     )
-    tag.add_argument("--limit", type=int, default=0)
-    tag.add_argument(
+    advanced.add_argument("--limit", type=int, default=0)
+    advanced.add_argument(
         "--retries",
         type=int,
         default=env_int("MOODTAG_RETRIES", DEFAULT_RETRIES, minimum=0),
     )
-    tag.add_argument(
+    advanced.add_argument(
         "--temperature",
         type=float,
         default=env_float("MOODTAG_TEMPERATURE", DEFAULT_TEMPERATURE, minimum=0),
     )
-    tag.add_argument(
+    advanced.add_argument(
         "--top-p",
         type=float,
         default=env_float("MOODTAG_TOP_P", DEFAULT_TOP_P, minimum=0.000001, maximum=1),
     )
-    tag.add_argument(
+    advanced.add_argument(
         "--max-tokens",
         type=int,
         default=env_int(
             "MOODTAG_MAX_TOKENS", DEFAULT_MAX_TOKENS, minimum=MIN_MAX_TOKENS
         ),
     )
-    tag.add_argument("--fail-fast", action="store_true")
-    tag.add_argument(
-        "--json", action="store_true", help="Write one final JSON result to stdout"
+    advanced.add_argument(
+        "--fail-fast",
+        action="store_true",
+        help=tr("Stop after the first failure", "遇到首个错误时停止"),
     )
-    tag.add_argument("--plain", action="store_true", help="Disable color and animation")
-    tag.add_argument("-q", "--quiet", action="count", default=0)
-    tag.add_argument("-v", "--verbose", action="count", default=0)
-    tag.add_argument(
+    advanced.add_argument(
+        "--json",
+        action="store_true",
+        help=tr("Write a JSON result to stdout", "以 JSON 格式输出结果"),
+    )
+    advanced.add_argument(
+        "--plain",
+        action="store_true",
+        help=tr("Disable color and animation", "关闭颜色和动画"),
+    )
+    advanced.add_argument("-q", "--quiet", action="count", default=0)
+    advanced.add_argument("-v", "--verbose", action="count", default=0)
+    advanced.add_argument(
         "--no-response-format",
         action="store_true",
         default=env_bool("MOODTAG_NO_RESPONSE_FORMAT", DEFAULT_NO_RESPONSE_FORMAT),
     )
-    tag.add_argument(
+    advanced.add_argument(
         "--response-format",
         dest="no_response_format",
         action="store_false",
@@ -4040,44 +4095,79 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tag.set_defaults(func=command_tag)
 
-    brief = sub.add_parser("brief", help="Print a board brief from Eagle metadata")
+    brief = sub.add_parser("brief", help=tr("Print a folder brief", "输出文件夹摘要"))
     common(brief)
-    brief.add_argument("--output", default="")
+    brief.add_argument(
+        "--output", default="", help=tr("Write output to this file", "将结果写入此文件")
+    )
     brief.set_defaults(func=command_brief)
 
     export = sub.add_parser(
-        "export-context", help="Export a board as compact Markdown context"
+        "export-context",
+        help=tr("Export a folder as Markdown context", "将文件夹导出为 Markdown 摘要"),
     )
     common(export)
-    export.add_argument("--output", default="", help="Write Markdown to this file")
+    export.add_argument(
+        "--output",
+        default="",
+        help=tr("Write Markdown to this file", "将 Markdown 写入此文件"),
+    )
     export.add_argument(
         "--include-pending",
         action="store_true",
-        help="Include items without complete Moodtag annotation",
+        help=tr(
+            "Include items without complete Moodtag annotation",
+            "包含尚无完整 Moodtag 标注的素材",
+        ),
     )
     export.set_defaults(func=command_export_context)
 
     reset = sub.add_parser(
-        "reset", help="Remove moodtag annotation fields from board items"
+        "reset",
+        help=tr(
+            "Remove Moodtag annotations from a folder", "移除文件夹中的 Moodtag 标注"
+        ),
     )
     common(reset)
-    reset.add_argument("--write", action="store_true")
+    reset.add_argument(
+        "--write",
+        action="store_true",
+        help=tr("Apply the reset to Eagle", "将清理结果写入 Eagle"),
+    )
     reset.set_defaults(func=command_reset)
 
-    config = sub.add_parser("config", help="View or change Moodtag configuration")
+    config = sub.add_parser(
+        "config", help=tr("View or change configuration", "查看或修改配置")
+    )
     config_sub = config.add_subparsers(dest="config_command", required=True)
-    config_profile = config_sub.add_parser("profile", help="Select persisted profile")
-    config_profile.add_argument("profile", nargs="?")
+    config_profile = config_sub.add_parser(
+        "profile", help=tr("Select tagging style", "选择标注风格")
+    )
+    config_profile.add_argument(
+        "profile", nargs="?", help=tr("Tagging style name", "标注风格名称")
+    )
     config_profile.set_defaults(func=command_config_profile)
-    config_model = config_sub.add_parser("model", help="Configure model service")
+    config_model = config_sub.add_parser(
+        "model", help=tr("Set up or change the model", "配置或切换模型")
+    )
     config_model.add_argument(
-        "profile_id", nargs="?", help="Switch to a saved model profile"
+        "profile_id",
+        nargs="?",
+        help=tr("Switch to a saved model profile", "切换已保存的模型配置"),
     )
     config_model.set_defaults(func=command_config_model)
-    config_reset = config_sub.add_parser("reset", help="Safely reset configuration")
+    config_reset = config_sub.add_parser(
+        "reset", help=tr("Reset configuration", "重置配置")
+    )
     config_reset.set_defaults(func=command_config_reset)
-    config_show = config_sub.add_parser("show", help="Show configuration")
-    config_show.add_argument("--json", action="store_true")
+    config_show = config_sub.add_parser(
+        "show", help=tr("Show current configuration", "查看当前配置")
+    )
+    config_show.add_argument(
+        "--json",
+        action="store_true",
+        help=tr("Output configuration as JSON", "以 JSON 格式输出配置"),
+    )
     config_show.set_defaults(func=command_config_show)
     return parser
 
@@ -4340,8 +4430,14 @@ def ask_scope_value(printer: Printer, label: str) -> str | None:
 
 def main(argv: list[str] | None = None) -> int:
     try:
-        load_env_defaults()
         argv = list(sys.argv[1:] if argv is None else argv)
+        if any(value in {"--help", "-h"} for value in argv) or argv == ["help"]:
+            help_argv = argv if argv != ["help"] else ["--help"]
+            build_parser({}).parse_args(
+                help_argv if help_argv[0] in {"-h", "--help"} else help_argv
+            )
+            return 0
+        load_env_defaults()
         if not argv:
             if sys.stdin.isatty() and sys.stdout.isatty():
                 return command_home()
@@ -4356,7 +4452,7 @@ def main(argv: list[str] | None = None) -> int:
                     "API keys must be entered through interactive setup or MOODTAG_API_KEY."
                 )
         if argv and argv[0] == "help":
-            build_parser().print_help()
+            build_parser({}).print_help()
             return 0
         if argv and argv[0] == "selected":
             argv = ["tag", "--selected", *argv[1:]]
