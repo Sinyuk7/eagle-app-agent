@@ -42,18 +42,6 @@ ANNOTATION_LABELS = {
     "product_categories": "ProductCategories",
     "commercial_format_confidence": "CommercialFormatConfidence",
 }
-DEFAULT_JSON_TEMPLATE = (
-    '{"brief":"","elements":[],"use":"","key":"","camera":"",'
-    '"light_color":"","suggest_title":"","tags":[],"use_intents":[]}'
-)
-EDITORIAL_JSON_TEMPLATE = (
-    '{"brief":"","elements":[],"use":"","key":"","camera":"",'
-    '"light_color":"","visible_text":[],"brand_evidence":[],'
-    '"product_categories":[],"commercial_format_confidence":"not_assessed",'
-    '"suggest_title":"","tags":[],"use_intents":[]}'
-)
-JSON_TEMPLATE = DEFAULT_JSON_TEMPLATE
-
 USE_INTENT_TAGS = {
     "pose_reference": "pose ref",
     "lighting_reference": "lighting ref",

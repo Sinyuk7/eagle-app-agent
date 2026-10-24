@@ -96,6 +96,10 @@ class SingleProviderProtocolTests(unittest.TestCase):
             "key": "key",
             "camera": "camera",
             "light_color": "light",
+            "visible_text": [],
+            "brand_evidence": [],
+            "product_categories": [],
+            "commercial_format_confidence": "not_assessed",
             "suggest_title": "",
             "tags": [],
             "use_intents": [],
@@ -357,6 +361,28 @@ class SingleProviderProtocolTests(unittest.TestCase):
             envelope.metadata.headers, {"x-request-id": "req_test", "retry-after": "2"}
         )
         self.assertEqual(client.last_attempts[-1].submission_state, "response_received")
+
+    def test_remote_rejects_editorial_response_missing_schema_fields(self):
+        payload = self.analysis_payload()
+        payload.pop("visible_text")
+        response = {"choices": [{"message": {"content": json.dumps(payload)}}]}
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "image.jpg"
+            image.write_bytes(b"jpeg")
+            client = VisionClient(
+                protocol="chat",
+                base_url="https://example.test/v1",
+                model="vision",
+                api_key="custom-secret",
+            )
+            with (
+                mock.patch(
+                    "moodtag_core.remote.http_request_with_metadata",
+                    return_value=HTTPResponse(response, 200, {}),
+                ),
+                self.assertRaisesRegex(CoreError, "missing required fields"),
+            ):
+                client.analyze(image, {}, retries=0, max_tags=3)
 
     def test_incomplete_responses_are_rejected_before_business_parse(self):
         with tempfile.TemporaryDirectory() as directory:

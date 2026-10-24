@@ -7,8 +7,8 @@ Use the allowed taxonomy and use intents. Keep the analysis concise and searchab
 - key: start with visible brand/logo/wordmark/product evidence when present; otherwise state 无品牌证据, then give the concrete visual hook. Never infer a brand from styling or metadata.
 - camera: Chinese-first fragments for visible shot size, angle, framing, placement, negative space, perspective, and scale.
 - light_color: Chinese-first fragments describing dominant, supporting, and accent colors and their wardrobe/environment relationships.
-- visible_text: exact readable words or short phrases from pixels; empty when none.
-- brand_evidence: readable brand, wordmark, logo, or product mark and its visible location; empty when none.
+- visible_text: exact legible words or short phrases from pixels; empty when none.
+- brand_evidence: identifiable visible brand mark, logo, or wordmark and its visible location; empty when none.
 - product_categories: visible generic product-category nouns; empty when none.
 - commercial_format_confidence: confirmed only with explicit pixel evidence, probable when visual evidence and consistent supplied context support a format, otherwise not_assessed. Metadata alone never confirms it.
 - suggest_title: concise searchable replacement only when the original title is generic, temporary, or meaningless; preserve meaningful names with an empty string.

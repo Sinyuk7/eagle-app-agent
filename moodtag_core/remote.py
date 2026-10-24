@@ -40,8 +40,12 @@ from .prompts import (
     render_user_prompt,
     resolve_profile,
 )
-from .response import parse_analysis_response
-from .schema import moodtag_json_schema
+from .response import (
+    extract_assistant_content,
+    parse_analysis_response,
+    parse_json_content,
+)
+from .schema import moodtag_json_schema, validate_json_schema
 
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 _SUCCESS_FINISH_REASONS = {"stop", "tool_calls", "function_call"}
@@ -338,6 +342,8 @@ class VisionClient:
                 status_error = _response_status_error(response.data, endpoint.protocol)
                 if status_error:
                     raise CoreError(status_error)
+                parsed = parse_json_content(extract_assistant_content(response.data))
+                validate_json_schema(parsed, moodtag_json_schema(self.profile))
                 result = parse_analysis_response(
                     response.data, taxonomy, max_tags=max_tags
                 )
