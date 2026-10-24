@@ -12,8 +12,6 @@ The package name is `eagle-app-agent`; the installed command is `moodtag`.
 | `moodtag/` | CLI entry point, Eagle API integration, config handling, command behavior. |
 | `moodtag_core/` | Shared prompt, response, annotation, provider, taxonomy, and contract logic. |
 | `moodtag_core/resources/` | Bundled prompts and profile taxonomies. |
-| `moodboard/` | `moodboard` CLI entry point. |
-| `moodboard_core/` | Moodboard HTML generation, validation, and bundled templates. |
 | `scripts/` | Real Eagle E2E and support scripts. |
 | `tests/` | Unit tests with fake Eagle and mocked model behavior. |
 | `.env.example` | Local environment template. |
@@ -215,8 +213,8 @@ Covered checks:
 
 - Ruff formatting
 - Ruff lint with safe fixes
-- Python bytecode compilation for `moodtag`, `moodtag_core`, `moodboard`,
-  `moodboard_core`, `scripts`, and `tests`
+- Python bytecode compilation for `moodtag`, `moodtag_core`, `scripts`, and
+  `tests`
 
 The pre-push hook additionally runs the local release check:
 

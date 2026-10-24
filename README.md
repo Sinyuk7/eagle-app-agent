@@ -55,5 +55,4 @@ Apple Silicon Mac 使用正式发布的签名安装包。若 macOS 阻止打开�
 - [高级 CLI 与自动化](docs/cli-reference.md)
 - [架构说明](docs/architecture.md)
 - [Benchmark](docs/benchmarks.md)
-- [Moodboard 工具](docs/moodboard.md)
 - [贡献指南](CONTRIBUTING.md)
