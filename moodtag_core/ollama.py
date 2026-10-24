@@ -202,6 +202,7 @@ class OllamaVisionClient:
                         taxonomy,
                         profile=self.profile,
                         output_language=self.output_language,
+                        provider="ollama",
                     )
                     + render_item_context(original_title, source_url),
                     "images": [base64.b64encode(image.read_bytes()).decode("ascii")],

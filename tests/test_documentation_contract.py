@@ -12,3 +12,6 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertNotIn("prompt_eval_count", readme)
         self.assertIn("model-setup.md", readme)
         self.assertIn("cli-reference.md", readme)
+        self.assertIn("moodtag_lang", readme)
+        self.assertIn("zh", readme)
+        self.assertIn("en", readme)

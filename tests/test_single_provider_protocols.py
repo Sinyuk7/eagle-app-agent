@@ -25,6 +25,26 @@ from moodtag_core.response import extract_assistant_content
 
 
 class SingleProviderProtocolTests(unittest.TestCase):
+    def test_ollama_payload_selects_profile_prompt_and_shared_schema(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "image.jpg"
+            image.write_bytes(b"jpeg")
+            default = OllamaVisionClient(
+                model="vision", profile="default", output_language="en"
+            ).build_payload(image, {"genre": ["fashion"]})
+            editorial = OllamaVisionClient(
+                model="vision", profile="editorial", output_language="zh"
+            ).build_payload(image, {"genre": ["fashion"]})
+
+        default_user = default["messages"][1]["content"]
+        editorial_user = editorial["messages"][1]["content"]
+        self.assertIn("Output language: English", default_user)
+        self.assertIn("Output language: Chinese", editorial_user)
+        self.assertIn("Review relevant taxonomy facets independently", default_user)
+        self.assertIn("Commercial formats are distinct", editorial_user)
+        self.assertEqual(default["format"], moodtag_json_schema("default"))
+        self.assertEqual(editorial["format"], moodtag_json_schema("editorial"))
+
     def test_ollama_default_preset_explicitly_disables_thinking(self):
         with tempfile.TemporaryDirectory() as directory:
             image = Path(directory) / "image.jpg"

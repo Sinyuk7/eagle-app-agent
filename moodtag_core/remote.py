@@ -488,26 +488,3 @@ class VisionClient:
                 headers=headers or {},
             )
         )
-
-
-OLLAMA_PRESETS: dict[str, dict[str, Any]] = {
-    "smoke": {"temperature": 0, "think": False},
-    "qwen-instruct": {
-        "temperature": 0.7,
-        "top_p": 0.8,
-        "top_k": 20,
-        "min_p": 0,
-        "presence_penalty": 1.5,
-        "repeat_penalty": 1,
-        "think": False,
-    },
-    "mlx-default": {
-        "temperature": 1,
-        "top_p": 0.95,
-        "top_k": 20,
-        "min_p": 0,
-        "presence_penalty": 1.5,
-        "repeat_penalty": 1,
-        "think": False,
-    },
-}

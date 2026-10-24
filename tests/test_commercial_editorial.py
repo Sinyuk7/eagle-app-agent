@@ -46,6 +46,28 @@ class CommercialEditorialTests(unittest.TestCase):
         self.assertIn("brand_evidence:", editorial_prompt)
         self.assertIn("commercial_format_confidence:", editorial_prompt)
 
+    def test_ollama_uses_profile_specific_user_prompts(self):
+        ollama_default = render_user_prompt(
+            self.taxonomy, profile="default", provider="ollama", output_language="en"
+        )
+        ollama_editorial = render_user_prompt(
+            self.taxonomy, profile="editorial", provider="ollama", output_language="zh"
+        )
+        remote_editorial = render_user_prompt(
+            self.taxonomy, profile="editorial", provider="remote"
+        )
+
+        self.assertIn("Output language: English", ollama_default)
+        self.assertIn("Output language: Chinese", ollama_editorial)
+        self.assertIn("Review relevant taxonomy facets independently", ollama_default)
+        self.assertIn("Commercial formats are distinct", ollama_editorial)
+        self.assertIn("training data", ollama_editorial)
+        self.assertIn("commercial_format: campaign", ollama_editorial)
+        self.assertNotIn("Commercial formats are distinct", remote_editorial)
+        self.assertNotIn(
+            "Review relevant taxonomy facets independently", remote_editorial
+        )
+
     def test_title_rules_identify_uninformative_names_in_both_profiles(self):
         for profile in ("default", "editorial"):
             prompt = render_user_prompt(self.taxonomy, profile=profile)

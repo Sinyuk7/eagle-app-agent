@@ -106,12 +106,18 @@ def render_user_prompt(
     *,
     profile: str = "editorial",
     output_language: str = "zh",
+    provider: str = "remote",
 ) -> str:
     prompt_profile = resolve_profile(profile)
+    if provider not in {"remote", "ollama"}:
+        raise CoreError(f"Unknown prompt provider: {provider}")
+    resource_name = prompt_profile.user_prompt
+    if provider == "ollama":
+        resource_name = f"ollama-{prompt_profile.id}-user-prompt.txt"
     template = (
         read_template(path)
         if path is not None
-        else read_template(resource_name=prompt_profile.user_prompt)
+        else read_template(resource_name=resource_name)
     )
     language_name = (
         "Chinese" if str(output_language).lower().startswith("zh") else "English"

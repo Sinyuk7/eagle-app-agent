@@ -18,6 +18,8 @@ moodtag <Eagle 文件夹 URL 或 ID>
 
 首次使用时，Moodtag 会引导你配置模型。Remote API 会将图片发送给服务商，可能产生费用；Ollama 使用本机安装的视觉模型。
 
+分析结果默认使用英文；将 `export MOODTAG_LANG=""` 添加到 Shell 配置文件可跟随系统语言，设置为 `export MOODTAG_LANG=zh` 或 `export MOODTAG_LANG=en` 可指定语言。
+
 ## 如何安装
 
 macOS 用户可从 [GitHub Releases](https://github.com/Sinyuk7/eagle-app-agent/releases/latest) 下载签名安装包。
