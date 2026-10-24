@@ -103,6 +103,7 @@ class VisionClient:
         top_p: float = DEFAULT_TOP_P,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         profile: str = "editorial",
+        output_language: str = "zh",
     ) -> None:
         self.protocol = validate_protocol(protocol)
         self.base_url = normalize_base_url(base_url, self.protocol)
@@ -112,6 +113,7 @@ class VisionClient:
         self.top_p = top_p
         self.max_tokens = max_tokens
         self.profile = resolve_profile(profile).id
+        self.output_language = output_language
         entry = catalog_entry_for_model(self.model)
         self.explicit_prompt_cache = bool(
             entry
@@ -139,7 +141,9 @@ class VisionClient:
         source_url: str = "",
     ) -> dict[str, Any]:
         system = read_system_prompt(profile=self.profile)
-        prompt = render_user_prompt(taxonomy, profile=self.profile)
+        prompt = render_user_prompt(
+            taxonomy, profile=self.profile, output_language=self.output_language
+        )
         item_context = render_item_context(original_title, source_url)
         dynamic_prompt = f"{prompt}{item_context}"
         if self.protocol == "chat":

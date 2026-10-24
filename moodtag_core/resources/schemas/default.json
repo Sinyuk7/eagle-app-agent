@@ -3,17 +3,19 @@
   "properties": {
     "brief": {
       "type": "string",
-      "description": "Concise Chinese description of visible subject, action or state, and scene."
+      "description": "Concise description of visible subject, action or state, and scene."
     },
     "elements": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "minItems": 1,
-      "description": "Searchable Chinese noun phrases for visible static subjects, clothing, props, and scene objects."
+      "description": "Searchable noun phrases for visible static subjects, clothing, props, and scene objects."
     },
     "use": {
       "type": "string",
-      "description": "Concise Chinese note describing the image's practical reference use."
+      "description": "Concise note describing the image's practical reference use."
     },
     "key": {
       "type": "string",
@@ -33,12 +35,16 @@
     },
     "tags": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Exact tags selected from the supplied taxonomy."
     },
     "use_intents": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Exact internal use-intent identifiers selected from the supplied list."
     }
   },

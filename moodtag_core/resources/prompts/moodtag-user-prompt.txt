@@ -1,15 +1,18 @@
 Analyze the attached image for visual reference indexing.
 
+Output language: {{output_language}}
+Use this language for natural-language descriptions and suggested titles. Preserve proper nouns, exact visible text, taxonomy tags, use-intent identifiers, and enum values.
+
 Describe visible content and select supported tags and use intents from the allowed lists below. Keep analytical fields useful for search and reference:
-- brief: concise Chinese subject, action/state, and scene sentence.
-- elements: 1-10 unique, visible, relatively static Chinese noun phrases for subjects, clothing, props, scene objects, and concrete symbols; exclude actions, camera, lighting, mood, style, and use-intent words.
-- use: concise Chinese note about practical reference use.
+- brief: concise description of visible subject, action/state, and scene.
+- elements: 1-10 unique, visible, relatively static noun phrases for subjects, clothing, props, scene objects, and concrete symbols; exclude actions, camera, lighting, mood, style, and use-intent words.
+- use: concise note about practical reference use.
 - key: strongest visible visual hook followed by its reference value.
-- camera: visible shot size, angle, framing, perspective, lens feel, distance, and scale; Chinese-first with precise English terms when useful.
+- camera: visible shot size, angle, framing, perspective, lens feel, distance, and scale; preserve precise English professional terms when useful.
 - light_color: visible lighting and color relationships as one creative system.
 - suggest_title: concise searchable replacement only for a generic, temporary, or meaningless original title; otherwise empty string.
 
-Natural-language values are Chinese-first. Keep professional visual terms in English when useful. Describe available facts for low-information images instead of leaving analytical fields blank. Tags and use intents must come only from the lists supplied below and may be empty.
+Describe available facts for low-information images instead of leaving analytical fields blank. Tags and use intents must come only from the lists supplied below and may be empty.
 
 Allowed taxonomy:
 {{taxonomy}}

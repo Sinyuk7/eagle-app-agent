@@ -76,7 +76,7 @@ from .config import (
     save_user_config,
     update_user_config,
 )
-from .ui.locale import tr
+from .ui.locale import language, tr
 from .ui.menu import MenuCancelled, MenuChoice, choose
 from .ui.printer import Printer
 from .ui.session import Session
@@ -1487,6 +1487,7 @@ def make_vision_client(
             base_url=base_url or "http://127.0.0.1:11434",
             model=model,
             profile=args.profile,
+            output_language=language(),
             preset=str(getattr(args, "ollama_preset", "qwen-instruct")),
             options={"num_predict": args.max_tokens},
         )
@@ -1514,6 +1515,7 @@ def make_vision_client(
         top_p=args.top_p,
         max_tokens=args.max_tokens,
         profile=args.profile,
+        output_language=language(),
     )
 
 

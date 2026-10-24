@@ -105,6 +105,7 @@ def render_user_prompt(
     path: Path | None = None,
     *,
     profile: str = "editorial",
+    output_language: str = "zh",
 ) -> str:
     prompt_profile = resolve_profile(profile)
     template = (
@@ -112,9 +113,14 @@ def render_user_prompt(
         if path is not None
         else read_template(resource_name=prompt_profile.user_prompt)
     )
-    return template.replace(
-        "{{taxonomy}}", render_taxonomy_for_prompt(taxonomy)
-    ).replace("{{use_intents}}", render_use_intents_for_prompt())
+    language_name = (
+        "Chinese" if str(output_language).lower().startswith("zh") else "English"
+    )
+    return (
+        template.replace("{{output_language}}", language_name)
+        .replace("{{taxonomy}}", render_taxonomy_for_prompt(taxonomy))
+        .replace("{{use_intents}}", render_use_intents_for_prompt())
+    )
 
 
 def safe_source_url(value: str) -> str:

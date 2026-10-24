@@ -67,6 +67,38 @@ class SingleProviderProtocolTests(unittest.TestCase):
             self.assertIn("https://example.test/pin", prompt)
             self.assertNotIn("private", prompt)
 
+    def test_output_language_is_in_stable_prompt_and_schema_is_language_neutral(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "image.jpg"
+            image.write_bytes(b"jpeg")
+            english = VisionClient(
+                protocol="chat",
+                base_url="https://example.test/v1",
+                model="vision",
+                api_key="key",
+                profile="editorial",
+                output_language="en",
+            ).build_payload(image, {"genre": ["fashion"]})
+            chinese = VisionClient(
+                protocol="chat",
+                base_url="https://example.test/v1",
+                model="vision",
+                api_key="key",
+                profile="editorial",
+                output_language="zh",
+            ).build_payload(image, {"genre": ["fashion"]})
+        english_prompt = english["messages"][1]["content"][0]["text"]
+        chinese_prompt = chinese["messages"][1]["content"][0]["text"]
+        self.assertIn("Output language: English", english_prompt)
+        self.assertIn("Output language: Chinese", chinese_prompt)
+        self.assertIn("genre: fashion", english_prompt)
+        self.assertNotIn("Chinese-first", english_prompt)
+        for profile in ("default", "editorial"):
+            descriptions = moodtag_json_schema(profile)["properties"].values()
+            self.assertFalse(
+                any("Chinese" in str(description) for description in descriptions)
+            )
+
     def test_suggest_title_is_required_by_both_profile_schemas(self):
         for profile in ("default", "editorial"):
             schema = moodtag_json_schema(profile)
