@@ -30,5 +30,6 @@ uv tool install git+https://github.com/Sinyuk7/eagle-app-agent.git
 
 ## 更多
 
+- [模型配置](docs/model-setup.md)
 - [CLI 进阶用法](docs/cli-reference.md)
 - [贡献指南](CONTRIBUTING.md)
