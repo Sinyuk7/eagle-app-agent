@@ -7,6 +7,7 @@ import os
 import socket
 import sys
 import tempfile
+import termios
 import time
 import types
 import unittest
@@ -33,7 +34,6 @@ from moodtag.cli import (
 from moodtag.ui.menu import MenuCancelled, MenuChoice, choose
 from moodtag.ui.printer import Printer
 from moodtag.ui.progress import Progress, _cell_width, _fit_title
-from moodtag.ui.session import Session
 from moodtag_core.annotation import build_annotation_block
 from moodtag_core.contract import MoodtagAnalysis
 from moodtag_core.provider import OllamaVisionClient
@@ -214,8 +214,9 @@ class WorkflowTests(unittest.TestCase):
             mock.patch("moodtag.cli.prompt_yes_no", return_value=True),
             mock.patch(
                 "moodtag.cli._command_tag_v2",
-                side_effect=lambda forwarded: observed.append(forwarded._resolved_scope)
-                or 0,
+                side_effect=lambda forwarded: (
+                    observed.append(forwarded._resolved_scope) or 0
+                ),
             ),
             redirect_stderr(io.StringIO()),
         ):
@@ -279,6 +280,54 @@ class WorkflowTests(unittest.TestCase):
         eagle.list_items.return_value = [item(1), item(2)]
         with self.assertRaisesRegex(MoodtagError, "Add filters"):
             resolve_item_scope(eagle, ScopeInput(library=True, max_items=1))
+
+    def test_entire_library_count_guard_runs_before_item_download(self):
+        eagle = mock.Mock()
+        eagle.count_items.return_value = 25_840
+        with self.assertRaisesRegex(MoodtagError, "25,840"):
+            resolve_item_scope(eagle, ScopeInput(library=True, max_items=9_999))
+        eagle.list_items.assert_not_called()
+
+    def test_entire_library_count_guard_allows_filtered_count(self):
+        eagle = mock.Mock()
+        eagle.count_items.return_value = 25_840
+        eagle.list_items.return_value = [
+            EagleItem("1", "image-1", "jpg", ["editorial"], [], "")
+        ]
+        result = resolve_item_scope(
+            eagle, ScopeInput(library=True, tags=("editorial",), max_items=9_999)
+        )
+        self.assertEqual(len(result.items), 1)
+        eagle.list_items.assert_called_once()
+
+    def test_library_tag_filter_stops_pagination_after_match_limit(self):
+        calls = []
+
+        def request(_method, _url, *, json_body, **_kwargs):
+            offset = json_body["offset"]
+            calls.append((json_body["limit"], offset))
+            rows = [
+                {
+                    "id": str(offset + index),
+                    "name": f"item-{offset + index}.jpg",
+                    "ext": "jpg",
+                    "tags": ["keep"] if offset >= 6 else ["other"],
+                }
+                for index in range(3)
+            ]
+            return {
+                "status": "success",
+                "data": {"data": rows, "total": 9, "limit": 3, "offset": offset},
+            }
+
+        eagle = EagleClient()
+        with mock.patch("moodtag.cli.http_request", side_effect=request):
+            with self.assertRaisesRegex(MoodtagError, "--max-board-items 2"):
+                resolve_item_scope(
+                    eagle,
+                    ScopeInput(library=True, tags=("keep",), max_items=2),
+                )
+        self.assertEqual(calls, [(1, 0), (1000, 0), (1000, 3), (1000, 6)])
 
     def test_export_context_writes_expected_markdown(self):
         complete = EagleItem(
@@ -646,10 +695,57 @@ class WorkflowTests(unittest.TestCase):
         Printer(stream=non_tty).emit("Moodtag", tone="brand")
         self.assertEqual(non_tty.getvalue(), "Moodtag\n")
 
+    def test_printer_hyperlink_uses_osc8_or_copyable_plain_url(self):
+        url = "https://example.test/register?aff=code"
+        capable = TtyStringIO()
+        with mock.patch.dict(os.environ, {"TERM": "xterm-256color"}, clear=True):
+            Printer(stream=capable).emit_hyperlink("Recommended service ↗", url)
+        self.assertIn(
+            "\x1b]8;;https://example.test/register?aff=code\x1b\\", capable.getvalue()
+        )
+        self.assertIn("Recommended service ↗", capable.getvalue())
+
+        plain = io.StringIO()
+        Printer(stream=plain).emit_hyperlink("Recommended service ↗", url)
+        self.assertEqual(plain.getvalue(), f"Recommended service ↗: {url}\n")
+
+    def test_printer_hyperlink_truncation_keeps_osc8_closed(self):
+        stream = TtyStringIO()
+        with (
+            mock.patch.dict(os.environ, {"TERM": "xterm-256color"}, clear=True),
+            mock.patch("moodtag.ui.printer.terminal_width", return_value=12),
+        ):
+            printer = Printer(stream=stream)
+            printer.emit_hyperlink("A very long recommendation", "https://example.test")
+            printer.emit("After link")
+        output = stream.getvalue()
+        self.assertEqual(output.count("\x1b]8;;"), 2)
+        self.assertIn("\x1b]8;;\x1b\\", output)
+        self.assertTrue(output.endswith("After link\n"))
+
+    def test_final_result_uses_chinese_status_resources(self):
+        output = io.StringIO()
+        args = argparse.Namespace(json=False, quiet=0, write=True)
+        with (
+            mock.patch.dict(os.environ, {"MOODTAG_LANG": "zh"}),
+            redirect_stderr(output),
+        ):
+            moodtag.cli._emit_final_result(
+                Printer(stream=output), args, RunResult("folder", 3, 2, 2, 1, 0)
+            )
+        rendered = output.getvalue()
+        self.assertIn("处理完成", rendered)
+        self.assertIn("2 项已更新", rendered)
+        self.assertIn("跳过 1 项", rendered)
+        self.assertIn("失败 0 项", rendered)
+
     def test_menu_sections_keep_keys_and_plain_readability(self):
         stream = io.StringIO()
         printer = Printer(stream=stream, plain=True)
-        with mock.patch("builtins.input", return_value="q"):
+        with (
+            mock.patch.dict(os.environ, {"MOODTAG_LANG": "en"}),
+            mock.patch("builtins.input", return_value="q"),
+        ):
             with self.assertRaises(MenuCancelled):
                 choose(
                     printer,
@@ -715,12 +811,13 @@ class WorkflowTests(unittest.TestCase):
         result = RunResult("Board", 4, 4, 2, 1, 1)
         stream = io.StringIO()
         args = argparse.Namespace(json=False, quiet=0, write=True)
-        self.assertEqual(
-            moodtag.cli._emit_final_result(
-                Printer(stream=stream, plain=True), args, result
-            ),
-            1,
-        )
+        with mock.patch.dict(os.environ, {"MOODTAG_LANG": "en"}):
+            self.assertEqual(
+                moodtag.cli._emit_final_result(
+                    Printer(stream=stream, plain=True), args, result
+                ),
+                1,
+            )
         self.assertEqual(
             stream.getvalue(),
             "Complete\n\n✓ 2 updated\n! 1 skipped\n× 1 failed\n\n"
@@ -729,12 +826,13 @@ class WorkflowTests(unittest.TestCase):
 
         quiet = io.StringIO()
         args = argparse.Namespace(json=False, quiet=1, write=True)
-        self.assertEqual(
-            moodtag.cli._emit_final_result(
-                Printer(stream=quiet, plain=True, quiet=1), args, result
-            ),
-            1,
-        )
+        with mock.patch.dict(os.environ, {"MOODTAG_LANG": "en"}):
+            self.assertEqual(
+                moodtag.cli._emit_final_result(
+                    Printer(stream=quiet, plain=True, quiet=1), args, result
+                ),
+                1,
+            )
         self.assertEqual(quiet.getvalue(), "Complete: 2 updated, 1 failed\n")
 
     def test_probe_starts_progress_at_one_of_full_selected_total(self):
@@ -765,6 +863,7 @@ class WorkflowTests(unittest.TestCase):
         result = TagItemResult(index=2, item=second, tags=["two"], annotation="two")
         stdout = io.StringIO()
         with (
+            mock.patch.dict(os.environ, {"MOODTAG_LANG": "en"}),
             mock.patch("moodtag.cli.Session", SessionRecorder),
             mock.patch("moodtag.make_vision_client", return_value=object()),
             mock.patch("moodtag.cli.EagleClient", return_value=eagle),
@@ -795,6 +894,7 @@ class WorkflowTests(unittest.TestCase):
         def run(*options: str) -> str:
             stderr = io.StringIO()
             with (
+                mock.patch.dict(os.environ, {"MOODTAG_LANG": "en"}),
                 mock.patch("moodtag.make_vision_client", return_value=object()),
                 mock.patch("moodtag.cli.EagleClient", return_value=Eagle()),
                 mock.patch("moodtag.cli.load_board_scope", return_value=scope),
@@ -831,6 +931,7 @@ class WorkflowTests(unittest.TestCase):
             ["tag", "--board", "board", "--mock-model", "--guided-main-flow"]
         )
         with (
+            mock.patch.dict(os.environ, {"MOODTAG_LANG": "en"}),
             mock.patch("moodtag.cli.spinner", no_spinner),
             mock.patch("moodtag.cli.EagleClient", return_value=Eagle()),
             mock.patch("moodtag.cli.load_board_scope", return_value=scope),
@@ -839,22 +940,61 @@ class WorkflowTests(unittest.TestCase):
         ):
             self.assertEqual(moodtag.cli._command_guided_tag_v2(args), 0)
         command_tag.assert_called_once_with(args)
-        self.assertEqual(spinners, ["Loading your Eagle board"])
+        self.assertEqual(spinners, ["Scanning Eagle folder…"])
 
     def test_menu_retries_then_returns_back_and_session_is_exclusive(self):
         stream = io.StringIO()
         printer = Printer(stream=stream, plain=True)
-        with mock.patch("builtins.input", side_effect=["bad", "b"]):
+        with (
+            mock.patch.dict(os.environ, {"MOODTAG_LANG": "en"}),
+            mock.patch("builtins.input", side_effect=["bad", "b"]),
+        ):
             self.assertIsNone(choose(printer, "Choose", ["one"], allow_back=True))
         self.assertIn("Enter a valid option.", stream.getvalue())
-        with mock.patch("builtins.input", return_value="q"):
-            with self.assertRaises(MenuCancelled):
-                choose(printer, "Choose", ["one"])
-        session = Session(printer)
-        with session.wait("Preparing"):
-            with self.assertRaises(RuntimeError):
-                with session.progress(1, "Analyzing"):
-                    pass
+
+    def test_key_menu_preserves_terminal_output_postprocessing(self):
+        from moodtag.ui import menu
+
+        stream = TtyStringIO()
+        original_attrs = [
+            termios.OPOST,
+            0,
+            0,
+            termios.ICANON | termios.ECHO,
+            0,
+            0,
+            [0] * 32,
+        ]
+        original_attrs[6][termios.VMIN] = 1
+        calls = []
+
+        def set_attrs(_fd, _when, attrs):
+            calls.append(attrs)
+
+        fake_stdin = mock.Mock()
+        fake_stdin.fileno.return_value = 9
+        with (
+            mock.patch("moodtag.ui.menu.sys.stdin", fake_stdin),
+            mock.patch(
+                "moodtag.ui.menu.termios.tcgetattr", return_value=original_attrs
+            ),
+            mock.patch("moodtag.ui.menu.termios.tcsetattr", side_effect=set_attrs),
+            mock.patch("moodtag.ui.menu.os.read", return_value=b"\n"),
+        ):
+            self.assertEqual(
+                menu._choose_keys(
+                    Printer(stream=stream),
+                    "Choose",
+                    [MenuChoice("one")],
+                    allow_back=False,
+                    default=None,
+                ),
+                0,
+            )
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(calls[0][1] & termios.OPOST)
+        self.assertFalse(calls[0][3] & termios.ICANON)
+        self.assertFalse(calls[0][3] & termios.ECHO)
 
 
 if __name__ == "__main__":

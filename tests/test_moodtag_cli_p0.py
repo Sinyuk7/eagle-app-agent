@@ -77,7 +77,7 @@ class MoodtagCliP0Tests(unittest.TestCase):
             with (
                 mock.patch.dict(
                     os.environ,
-                    {"MOODTAG_CONFIG": str(config)},
+                    {"MOODTAG_CONFIG": str(config), "MOODTAG_LANG": "en"},
                     clear=True,
                 ),
                 mock.patch("moodtag.cli.load_env_defaults"),
@@ -129,7 +129,7 @@ class MoodtagCliP0Tests(unittest.TestCase):
             with (
                 mock.patch.dict(
                     os.environ,
-                    {"MOODTAG_CONFIG": str(config)},
+                    {"MOODTAG_CONFIG": str(config), "MOODTAG_LANG": "en"},
                     clear=True,
                 ),
                 mock.patch("moodtag.cli.load_env_defaults"),
@@ -155,7 +155,7 @@ class MoodtagCliP0Tests(unittest.TestCase):
             with (
                 mock.patch.dict(
                     os.environ,
-                    {"MOODTAG_CONFIG": str(config)},
+                    {"MOODTAG_CONFIG": str(config), "MOODTAG_LANG": "en"},
                     clear=True,
                 ),
                 mock.patch("moodtag.cli.load_env_defaults"),

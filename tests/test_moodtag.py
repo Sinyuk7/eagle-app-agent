@@ -65,12 +65,15 @@ class MoodtagCliTests(unittest.TestCase):
     def test_non_tty_no_argument_is_actionable_and_does_not_prompt(self):
         stderr = io.StringIO()
         with (
+            mock.patch.dict(os.environ, {"MOODTAG_LANG": "en"}),
             mock.patch("moodtag.cli.load_env_defaults"),
             mock.patch("moodtag.cli.sys.stdin.isatty", return_value=False),
             redirect_stderr(stderr),
         ):
             self.assertEqual(moodtag.main([]), 2)
-        self.assertIn("No board supplied", stderr.getvalue())
+        self.assertIn("Choose a scope explicitly", stderr.getvalue())
+        self.assertIn("moodtag selected --write", stderr.getvalue())
+        self.assertIn("moodtag tag --library --write", stderr.getvalue())
 
     def test_secret_option_is_rejected(self):
         stderr = io.StringIO()
@@ -84,18 +87,20 @@ class MoodtagCliTests(unittest.TestCase):
         stderr = io.StringIO()
         with (
             mock.patch("moodtag.cli.load_env_defaults"),
+            mock.patch.dict(os.environ, {"MOODTAG_LANG": "en"}, clear=True),
             mock.patch("moodtag.cli.sys.stdin.isatty", return_value=True),
             mock.patch("moodtag.cli.sys.stdout.isatty", return_value=True),
             mock.patch("builtins.input", return_value="q"),
             redirect_stderr(stderr),
         ):
             self.assertEqual(moodtag.main([]), 0)
-        self.assertIn("Moodtag", stderr.getvalue())
+        self.assertIn("◆  MOODTAG", stderr.getvalue())
 
     def test_tty_tagging_style_cancel_returns_to_home(self):
         stderr = io.StringIO()
         with (
             mock.patch("moodtag.cli.load_env_defaults"),
+            mock.patch.dict(os.environ, {"MOODTAG_LANG": "en"}, clear=True),
             mock.patch("moodtag.cli.sys.stdin.isatty", return_value=True),
             mock.patch("moodtag.cli.sys.stdout.isatty", return_value=True),
             mock.patch("builtins.input", side_effect=["2", "q", "q"]),
@@ -104,7 +109,7 @@ class MoodtagCliTests(unittest.TestCase):
             self.assertEqual(moodtag.main([]), 0)
         output = stderr.getvalue()
         self.assertIn("Choose tagging style", output)
-        self.assertGreaterEqual(output.count("Moodtag"), 2)
+        self.assertGreaterEqual(output.count("◆  MOODTAG"), 2)
 
     def test_model_setup_cancel_is_not_an_error(self):
         stderr = io.StringIO()
@@ -248,6 +253,7 @@ class MoodtagCliTests(unittest.TestCase):
         eagle = AmbiguousEagle()
         stderr = io.StringIO()
         with (
+            mock.patch.dict(os.environ, {"MOODTAG_LANG": "en"}),
             mock.patch("moodtag.cli.load_env_defaults"),
             mock.patch("moodtag.EagleClient", return_value=eagle),
             mock.patch("moodtag.cli.sys.stdin.isatty", return_value=True),
@@ -258,7 +264,7 @@ class MoodtagCliTests(unittest.TestCase):
         ):
             self.assertEqual(moodtag.main(["Shared", "--mock-model", "--plain"]), 0)
 
-        self.assertIn("Multiple boards match. Choose one:", stderr.getvalue())
+        self.assertIn("Multiple folders found", stderr.getvalue())
         self.assertIn("Library/First/Shared", stderr.getvalue())
         self.assertEqual(eagle.updates, [])
 
@@ -303,7 +309,11 @@ class MoodtagCliTests(unittest.TestCase):
                     "profile": "editorial",
                 },
             ),
-            mock.patch.dict(os.environ, {"MOODTAG_API_KEY": "test-key"}, clear=True),
+            mock.patch.dict(
+                os.environ,
+                {"MOODTAG_API_KEY": "test-key", "MOODTAG_LANG": "en"},
+                clear=True,
+            ),
             mock.patch("moodtag.cli.sys.stdin.isatty", return_value=True),
             mock.patch("moodtag.cli.sys.stdout.isatty", return_value=True),
             mock.patch("builtins.input", return_value="q"),
@@ -311,8 +321,10 @@ class MoodtagCliTests(unittest.TestCase):
         ):
             self.assertEqual(moodtag.main([]), 0)
         output = stderr.getvalue()
-        self.assertIn("Model: gpt-5.6-luna · Remote API", output)
-        self.assertIn("Style: Editorial", output)
+        self.assertIn("Model   gpt-5.6-luna · Remote API", output)
+        self.assertIn("Style   Editorial", output)
+        self.assertIn("◆  MOODTAG", output)
+        self.assertIn("What would you like to do?", output)
         self.assertIn("Settings", output)
         self.assertIn("1  Tag images", output)
         self.assertNotIn("example.test", output)
@@ -322,7 +334,7 @@ class MoodtagCliTests(unittest.TestCase):
         with (
             mock.patch("moodtag.cli.load_env_defaults"),
             mock.patch("moodtag.cli.load_user_config", return_value={}),
-            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch.dict(os.environ, {"MOODTAG_LANG": "en"}, clear=True),
             mock.patch("moodtag.cli.sys.stdin.isatty", return_value=True),
             mock.patch("moodtag.cli.sys.stdout.isatty", return_value=True),
             mock.patch("builtins.input", return_value="q"),
@@ -330,8 +342,26 @@ class MoodtagCliTests(unittest.TestCase):
         ):
             self.assertEqual(moodtag.main([]), 0)
         output = stderr.getvalue()
-        self.assertIn("Model: Not configured", output)
-        self.assertIn("Style: Editorial", output)
+        self.assertIn("Model   Not configured", output)
+        self.assertIn("Style   Editorial", output)
+
+    def test_tty_home_uses_system_language_copy(self):
+        stderr = io.StringIO()
+        with (
+            mock.patch("moodtag.cli.load_env_defaults"),
+            mock.patch("moodtag.cli.load_user_config", return_value={}),
+            mock.patch.dict(os.environ, {"MOODTAG_LANG": "zh"}, clear=True),
+            mock.patch("moodtag.cli.sys.stdin.isatty", return_value=True),
+            mock.patch("moodtag.cli.sys.stdout.isatty", return_value=True),
+            mock.patch("builtins.input", return_value="q"),
+            redirect_stderr(stderr),
+        ):
+            self.assertEqual(moodtag.main([]), 0)
+        output = stderr.getvalue()
+        self.assertIn("Eagle 智能图片标注工具", output)
+        self.assertIn("模型   尚未配置", output)
+        self.assertIn("接下来做什么？", output)
+        self.assertIn("标注图片", output)
 
     def test_tty_home_reports_ollama_health_without_api_key(self):
         stderr = io.StringIO()
@@ -346,7 +376,7 @@ class MoodtagCliTests(unittest.TestCase):
         with (
             mock.patch("moodtag.cli.load_env_defaults"),
             mock.patch("moodtag.cli.load_user_config", return_value=config),
-            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch.dict(os.environ, {"MOODTAG_LANG": "en"}, clear=True),
             mock.patch("moodtag.cli.OllamaVisionClient", return_value=fake_client),
             mock.patch("moodtag.cli.sys.stdin.isatty", return_value=True),
             mock.patch("moodtag.cli.sys.stdout.isatty", return_value=True),
@@ -354,7 +384,7 @@ class MoodtagCliTests(unittest.TestCase):
             redirect_stderr(stderr),
         ):
             self.assertEqual(moodtag.main([]), 0)
-        self.assertIn("Model: qwen3.5:9b · Ollama", stderr.getvalue())
+        self.assertIn("Model   qwen3.5:9b · Ollama", stderr.getvalue())
 
     def test_bare_board_routes_to_guided_tag_and_commands_stay_argparse(self):
         captured = {}

@@ -8,6 +8,7 @@ import base64
 import concurrent.futures
 import contextlib
 import getpass
+import importlib.metadata
 import json
 import os
 import re
@@ -17,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import time  # noqa: F401 - tests patch module-level timing
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -39,7 +41,7 @@ from moodtag_core.annotation import (
     replace_analysis_annotation,
 )
 from moodtag_core.catalog import (
-    models_for_protocol,
+    load_model_catalog,
     protocol_for_model,
 )
 from moodtag_core.contract import (
@@ -75,6 +77,7 @@ from .config import (
     save_user_config,
     update_user_config,
 )
+from .ui.locale import tr
 from .ui.menu import MenuCancelled, MenuChoice, choose
 from .ui.printer import Printer
 from .ui.session import Session
@@ -504,17 +507,19 @@ def prompt_yes_no(
     printer = printer or Printer()
     while True:
         try:
-            printer.emit(f"{prompt} {suffix}")
+            printer.emit(f"{prompt} {suffix} · {tr('q Quit', 'q 退出')}")
             answer = input().strip().lower()
         except (EOFError, KeyboardInterrupt) as exc:
             raise MoodtagError("Setup cancelled.") from exc
+        if answer in {"q", "quit"}:
+            return False
         if not answer:
             return default
         if answer in {"y", "yes"}:
             return True
         if answer in {"n", "no"}:
             return False
-        printer.emit("Enter y or n.", state="warning")
+        printer.emit(tr("Enter y or n.", "请输入 y 或 n。"), state="warning")
 
 
 def public_attr(name: str) -> Any:
@@ -638,6 +643,8 @@ class EagleClient:
         selected: bool = False,
         rating: int | None = None,
         shape: str = "",
+        required_tags: tuple[str, ...] = (),
+        max_matches: int = -1,
     ) -> list[EagleItem]:
         """Read every page; Eagle may cap a requested limit at 1000."""
         if rating is not None and not 0 <= rating <= 5:
@@ -670,19 +677,35 @@ class EagleClient:
             raw_items = payload.get("data", [])
             if not isinstance(raw_items, list):
                 raise MoodtagError("Eagle item list returned invalid page data")
+            page_size = len(raw_items)
             page = [parse_item(raw) for raw in raw_items]
+            if required_tags:
+                wanted = tuple(tag.casefold() for tag in required_tags)
+                page = [
+                    item
+                    for item in page
+                    if all(
+                        any(existing.casefold() == tag for existing in item.tags)
+                        for tag in wanted
+                    )
+                ]
             items.extend(page)
+            if max_matches >= 0 and len(items) > max_matches:
+                raise MoodtagError(
+                    f"Entire library scope exceeds --max-board-items {max_matches}. "
+                    "Add filters or increase --max-board-items if this is intentional."
+                )
             total = payload.get("total")
             page_limit = int(payload.get("limit") or limit)
             page_offset = int(payload.get("offset") or offset)
             if total is None:
-                if len(page) < page_limit:
+                if page_size < page_limit:
                     return items
-            elif page_offset + len(page) >= int(total):
+            elif page_offset + page_size >= int(total):
                 return items
-            if not page:
+            if page_size == 0:
                 raise MoodtagError("Eagle item list pagination stopped before total")
-            offset = page_offset + len(page)
+            offset = page_offset + page_size
 
         if selected or rating is not None or shape:
             raise MoodtagError("Eagle API could not return the complete filtered scope")
@@ -699,16 +722,63 @@ class EagleClient:
             raw_items = data.get("data", [])
             if not isinstance(raw_items, list):
                 raise MoodtagError("Eagle item list returned invalid page data")
+            page_size = len(raw_items)
             page = [parse_item(raw) for raw in raw_items]
+            if required_tags:
+                wanted = tuple(tag.casefold() for tag in required_tags)
+                page = [
+                    item
+                    for item in page
+                    if all(
+                        any(existing.casefold() == tag for existing in item.tags)
+                        for tag in wanted
+                    )
+                ]
             items.extend(page)
+            if max_matches >= 0 and len(items) > max_matches:
+                raise MoodtagError(
+                    f"Entire library scope exceeds --max-board-items {max_matches}. "
+                    "Add filters or increase --max-board-items if this is intentional."
+                )
             total = data.get("total")
             if total is None:
                 return items
-            if offset + len(page) >= int(total):
+            if offset + page_size >= int(total):
                 return items
-            if not page:
+            if page_size == 0:
                 raise MoodtagError("Eagle item list pagination stopped before total")
-            offset += len(page)
+            offset += page_size
+
+    def count_items(
+        self,
+        folder_id: str = "",
+        *,
+        selected: bool = False,
+        rating: int | None = None,
+        shape: str = "",
+    ) -> int | None:
+        """Return Eagle's server-side item count without fetching all metadata."""
+        data = http_request(
+            "POST",
+            url_join(self.base_url, "/api/v2/item/get"),
+            json_body={
+                **({"folders": [folder_id]} if folder_id else {}),
+                **({"isSelected": True} if selected else {}),
+                **({"rating": rating} if rating is not None else {}),
+                **({"shape": shape} if shape else {}),
+                "limit": 1,
+                "offset": 0,
+            },
+            timeout=30,
+        )
+        if not isinstance(data, dict) or data.get("status") != "success":
+            return None
+        payload = data.get("data") if isinstance(data.get("data"), dict) else {}
+        total = payload.get("total")
+        try:
+            return int(total) if total is not None else None
+        except (TypeError, ValueError):
+            return None
 
     def thumbnail_path(self, item_id: str) -> Path:
         query = urllib.parse.urlencode({"id": item_id})
@@ -943,7 +1013,33 @@ def resolve_item_scope(eagle: Any, scope_input: ScopeInput) -> ResolvedScope:
             library_filters["rating"] = scope_input.rating
         if scope_input.shape:
             library_filters["shape"] = scope_input.shape
-        items = eagle.list_items("", **library_filters)
+        count_items = getattr(eagle, "count_items", None)
+        total = count_items("", **library_filters) if callable(count_items) else None
+        if not isinstance(total, int) or isinstance(total, bool):
+            total = None
+        if (
+            total is not None
+            and scope_input.max_items >= 0
+            and total > scope_input.max_items
+        ):
+            if not scope_input.tags:
+                raise MoodtagError(
+                    f"Entire library has {total:,} items, exceeding "
+                    f"--max-board-items {scope_input.max_items:,}. Add filters or "
+                    "increase --max-board-items if this is intentional."
+                )
+        items = eagle.list_items(
+            "",
+            **library_filters,
+            **(
+                {
+                    "required_tags": scope_input.tags,
+                    "max_matches": scope_input.max_items,
+                }
+                if scope_input.tags and scope_input.max_items >= 0
+                else {}
+            ),
+        )
         source = "Entire library"
         library_info = getattr(eagle, "library_info", None)
         if callable(library_info):
@@ -1404,18 +1500,8 @@ def ensure_model_setup(args: argparse.Namespace) -> None:
         return
     if not sys.stdin.isatty():
         raise MoodtagError("Model setup incomplete. Run `moodtag config model`.")
-    values = _setup_prompt(Printer())
-    setup_printer = Printer()
+    values = _setup_prompt(Printer(), load_user_config())
     source = values.get("source", "openai-compatible")
-    setup_printer.emit(f"Service URL: {values['base_url']}")
-    setup_printer.emit(f"Model: {values['model']}")
-    setup_printer.emit(
-        "API key: Not required" if source == "ollama" else "API key: Ready"
-    )
-    if not prompt_yes_no(
-        "Save this model configuration?", default=False, printer=setup_printer
-    ):
-        raise MoodtagError("Setup cancelled.")
     _persist_setup(values)
     args.base_url = values["base_url"]
     args.model = values["model"]
@@ -2655,22 +2741,50 @@ def _emit_final_result(
     if getattr(args, "json", False):
         print(json.dumps(result.as_dict(), ensure_ascii=False, sort_keys=True))
     elif not getattr(args, "quiet", 0):
-        action = "updated" if getattr(args, "write", False) else "analyzed (dry run)"
+        action = (
+            tr("updated", "已更新")
+            if getattr(args, "write", False)
+            else tr("analyzed (dry run)", "已分析（试运行）")
+        )
         if result.cancelled:
-            printer.emit("Cancelled", state="warning", force=True)
+            printer.emit(tr("Cancelled", "已取消"), state="warning", force=True)
         else:
-            printer.emit("Complete", tone="primary", force=True)
+            printer.emit(tr("Complete", "处理完成"), tone="primary", force=True)
         printer.emit("")
-        printer.emit(f"{result.changed} {action}", state="success", force=True)
-        printer.emit(f"{result.skipped} skipped", state="warning", force=True)
-        printer.emit(f"{result.failed} failed", state="failure", force=True)
+        printer.emit(
+            tr(f"{result.changed} {action}", f"{result.changed} 项{action}"),
+            state="success",
+            force=True,
+        )
+        printer.emit(
+            tr(f"{result.skipped} skipped", f"跳过 {result.skipped} 项"),
+            state="warning",
+            force=True,
+        )
+        printer.emit(
+            tr(f"{result.failed} failed", f"失败 {result.failed} 项"),
+            state="failure",
+            force=True,
+        )
         if not result.cancelled:
             printer.emit("")
-            printer.emit("Use -v for image results", state="next", force=True)
+            printer.emit(
+                tr("Use -v for image results", "使用 -v 查看逐张图片结果"),
+                state="next",
+                force=True,
+            )
     elif not result.cancelled:
-        action = "updated" if getattr(args, "write", False) else "analyzed (dry run)"
+        action = (
+            tr("updated", "已更新")
+            if getattr(args, "write", False)
+            else tr("analyzed (dry run)", "已分析（试运行）")
+        )
         printer.emit(
-            f"Complete: {result.changed} {action}, {result.failed} failed", force=True
+            tr(
+                f"Complete: {result.changed} {action}, {result.failed} failed",
+                f"处理完成：{result.changed} 项{action}，失败 {result.failed} 项",
+            ),
+            force=True,
         )
     return result.exit_code
 
@@ -2713,13 +2827,22 @@ def _command_guided_tag_v2(args: argparse.Namespace) -> int:
         else:
             scope = _load_guided_board_scope(args, eagle, printer)
             if scope is None:
-                printer.emit("Cancelled. Nothing changed.", state="warning")
+                printer.emit(
+                    tr("Cancelled. Nothing changed.", "已取消，没有更改。"),
+                    state="warning",
+                )
                 return 3 if getattr(args, "_interactive_home", False) else 0
     except MoodtagError as exc:
         if getattr(args, "library", False) and "exceeding --max-board-items" in str(
             exc
         ):
-            printer.emit(str(exc), state="warning")
+            printer.emit(
+                tr(
+                    str(exc),
+                    f"图库项目数超过上限：{exc}。请缩小范围或调整 --max-board-items。",
+                ),
+                state="warning",
+            )
             return 4 if getattr(args, "_interactive_home", False) else 2
         raise
     items = scope.items
@@ -2732,37 +2855,63 @@ def _command_guided_tag_v2(args: argparse.Namespace) -> int:
         for item in items
     )
     if not items:
-        printer.emit("No matching images.", state="warning")
+        printer.emit(tr("No matching images.", "没有找到匹配的图片。"), state="warning")
         return 3 if getattr(args, "_interactive_home", False) else 0
-    printer.emit("Scope ready", state="next")
-    scope_label = "Library" if getattr(args, "library", False) else "Scope"
+    printer.emit(tr("Scope ready", "扫描完成"), state="next")
+    scope_label = (
+        tr("Library", "图库")
+        if getattr(args, "library", False)
+        else tr("Scope", "范围")
+    )
     printer.emit(f"{scope_label}: {scope.board.path}")
     filter_parts = []
     if args.tags:
-        filter_parts.append("Tags: " + ", ".join(args.tags))
+        filter_parts.append(tr("Tags: ", "标签：") + ", ".join(args.tags))
     if getattr(args, "rating", None) is not None:
-        filter_parts.append(f"Rating: {args.rating} (exact)")
+        filter_parts.append(
+            tr(f"Rating: {args.rating} (exact)", f"评分：{args.rating}（精确）")
+        )
     if getattr(args, "shape", None):
-        filter_parts.append(f"Shape: {args.shape}")
+        filter_parts.append(tr(f"Shape: {args.shape}", f"形状：{args.shape}"))
     if filter_parts:
-        printer.emit("Filters: " + " · ".join(filter_parts))
-    printer.emit(f"{len(items)} images · {completed} analyzed · {pending} pending")
+        printer.emit(tr("Filters: ", "筛选：") + " · ".join(filter_parts))
+    printer.emit(
+        tr(
+            f"{len(items)} images · {completed} analyzed · {pending} pending",
+            f"{len(items)} 张图片 · 已分析 {completed} · 待处理 {pending}",
+        )
+    )
     if unsupported or malformed:
         printer.emit(
-            f"{unsupported} unsupported · {malformed} malformed descriptions",
+            tr(
+                f"{unsupported} unsupported · {malformed} malformed descriptions",
+                f"不支持 {unsupported} · 异常描述 {malformed}",
+            ),
             state="warning",
         )
     if pending == 0 and malformed == 0 and completed == 0:
-        printer.emit("No supported images to analyze.", state="warning")
+        printer.emit(
+            tr("No supported images to analyze.", "没有可分析的受支持图片。"),
+            state="warning",
+        )
         return 0
-    if pending == len(items) and malformed == 0:
+    eligible = len(items) - unsupported
+    if pending == eligible and eligible > 0:
         selected = 0
     elif pending == 0 and completed > 0 and malformed == 0:
         try:
             selected = choose(
                 printer,
-                "All images are already analyzed",
-                [MenuChoice(f"Regenerate all ({len(items)})", primary=True)],
+                tr("All images are already analyzed", "所有图片都已分析"),
+                [
+                    MenuChoice(
+                        tr(
+                            f"Regenerate all ({len(items)})",
+                            f"全部重新生成（{len(items)}）",
+                        ),
+                        primary=True,
+                    )
+                ],
                 allow_back=True,
             )
         except MenuCancelled:
@@ -2770,39 +2919,148 @@ def _command_guided_tag_v2(args: argparse.Namespace) -> int:
         if selected is None:
             return 3 if getattr(args, "_interactive_home", False) else 0
         selected = 1
-    else:
+    elif pending == 0 and completed == 0 and malformed > 0:
         try:
-            selected = choose(
+            choice = choose(
                 printer,
-                "Choose processing strategy",
+                tr(
+                    f"{malformed} malformed descriptions found",
+                    f"发现 {malformed} 条异常描述",
+                ),
                 [
-                    MenuChoice(f"Analyze pending images ({pending})", primary=True),
-                    MenuChoice(f"Regenerate all ({len(items)})"),
+                    MenuChoice(
+                        tr(
+                            f"Regenerate malformed images ({malformed})",
+                            f"重新生成异常图片（{malformed}）",
+                        ),
+                        primary=True,
+                    )
                 ],
                 allow_back=True,
             )
         except MenuCancelled:
-            printer.emit("Cancelled. Nothing changed.", state="warning")
+            return 0
+        if choice is None:
+            return 3 if getattr(args, "_interactive_home", False) else 0
+        selected = 1
+    else:
+        try:
+            selected = choose(
+                printer,
+                tr("How should we proceed?", "如何处理？"),
+                [
+                    MenuChoice(
+                        tr(
+                            f"Analyze pending images ({pending})",
+                            f"分析待处理图片（{pending}）",
+                        ),
+                        primary=True,
+                    ),
+                    MenuChoice(
+                        tr(
+                            f"Regenerate all ({len(items)})",
+                            f"全部重新生成（{len(items)}）",
+                        )
+                    ),
+                ],
+                allow_back=True,
+            )
+        except MenuCancelled:
+            printer.emit(
+                tr("Cancelled. Nothing changed.", "已取消，没有更改。"),
+                state="warning",
+            )
             return 0
         if selected is None:
             return 3 if getattr(args, "_interactive_home", False) else 0
 
     if not getattr(args, "mock_model", False):
-        try:
-            ensure_model_setup(args)
-        except SetupCancelled:
-            printer.emit("Model setup cancelled. Nothing changed.", state="warning")
-            return 0
+        while True:
+            try:
+                ensure_model_setup(args)
+                break
+            except SetupCancelled:
+                if not sys.stdin.isatty():
+                    return 2
+                printer.emit(
+                    tr(
+                        "Model setup cancelled. Your image scope is still selected.",
+                        "模型设置已取消，当前图片范围仍然保留。",
+                    ),
+                    state="warning",
+                )
+                retry = choose(
+                    printer,
+                    tr("Continue this task", "继续当前任务"),
+                    [
+                        tr("Retry model setup", "重试模型设置"),
+                        tr("Change model", "切换模型"),
+                        tr("Cancel this task", "取消当前任务"),
+                    ],
+                    default=0,
+                )
+                if retry == 0:
+                    continue
+                if retry == 1:
+                    values = _setup_prompt(printer, load_user_config())
+                    _persist_setup(values)
+                    args.base_url = values["base_url"]
+                    args.model = values["model"]
+                    args.source = values.get("source", "openai-compatible")
+                    args.ollama_preset = values.get("ollama_preset", "qwen-instruct")
+                    if values.get("api_key"):
+                        os.environ["MOODTAG_API_KEY"] = values["api_key"]
+                    continue
+                return 0
+            except MoodtagError as exc:
+                if not sys.stdin.isatty():
+                    raise
+                printer.emit(
+                    tr(f"Model setup issue: {exc}", f"模型设置遇到问题：{exc}"),
+                    state="warning",
+                )
+                retry = choose(
+                    printer,
+                    tr("Model setup", "模型设置"),
+                    [
+                        tr("Retry", "重试"),
+                        tr("Change model", "切换模型"),
+                        tr("Cancel this task", "取消当前任务"),
+                    ],
+                    default=0,
+                )
+                if retry == 0:
+                    continue
+                if retry == 1:
+                    values = _setup_prompt(printer, load_user_config())
+                    _persist_setup(values)
+                    args.base_url = values["base_url"]
+                    args.model = values["model"]
+                    args.source = values.get("source", "openai-compatible")
+                    args.ollama_preset = values.get("ollama_preset", "qwen-instruct")
+                    if values.get("api_key"):
+                        os.environ["MOODTAG_API_KEY"] = values["api_key"]
+                    continue
+                return 0
     model_name = str(getattr(args, "model", "") or "configured model")
     model_source = str(getattr(args, "source", "") or "model provider")
     if model_source == "openai-compatible":
         model_source = "Remote API"
     count = pending if selected == 0 else len(items)
-    printer.emit(f"Ready to analyze {count} images")
-    printer.emit(f"Model: {model_name} · {model_source}")
-    printer.emit(f"Style: {tagging_style_name(args.profile)}")
-    if not prompt_yes_no("Start?", default=True, printer=printer):
-        printer.emit("Cancelled. Nothing changed.", state="warning")
+    printer.emit(tr(f"Ready to analyze {count} images", f"准备分析 {count} 张图片"))
+    printer.emit(f"{tr('Model', '模型')}   {model_name} · {model_source}")
+    printer.emit(f"{tr('Style', '风格')}   {tagging_style_name(args.profile)}")
+    start_default = selected == 0
+    prompt = (
+        tr("Regenerate all images?", "重新生成全部图片？")
+        if selected == 1
+        else tr("Start tagging?", "开始标注？")
+    )
+    if not prompt_yes_no(prompt, default=start_default, printer=printer):
+        printer.emit(
+            tr("Cancelled. Nothing changed.", "已取消，没有更改。"),
+            state="warning",
+        )
         return 0
     args.guided_main_flow = False
     args.write = True
@@ -2817,7 +3075,10 @@ def _load_guided_board_scope(
     """Resolve an interactive board query, letting the user recover from ambiguity."""
     while True:
         try:
-            with spinner(printer, "Loading your Eagle board"):
+            with spinner(
+                printer,
+                tr("Scanning Eagle folder…", "正在扫描 Eagle 文件夹…"),
+            ):
                 return load_board_scope(
                     eagle,
                     args.board,
@@ -2828,23 +3089,49 @@ def _load_guided_board_scope(
             candidates = find_board_candidates(
                 normalize_board_query(args.board), eagle.boards()
             )
-            if len(candidates) < 2:
-                raise exc
+            if not candidates:
+                printer.emit(
+                    tr(f"Could not find that folder: {exc}", f"找不到该文件夹：{exc}"),
+                    state="warning",
+                )
+                printer.emit(
+                    tr(
+                        "Folder URL, ID, name, or path · b Back · q Quit",
+                        "输入文件夹 URL、ID、名称或路径 · b 返回 · q 退出",
+                    )
+                )
+                try:
+                    value = input().strip()
+                except (EOFError, KeyboardInterrupt):
+                    return None
+                if value.lower() == "q":
+                    return None
+                if value.lower() == "b" or not value:
+                    return None
+                args.board = value
+                continue
+            if len(candidates) == 1:
+                args.board = candidates[0].id
+                continue
         try:
             selected = choose(
                 printer,
-                "Multiple boards match. Choose one:",
-                [
-                    *[f"{board.path} ({board.id})" for board in candidates],
-                    "Retry board lookup",
-                ],
+                tr("Multiple folders found", "找到多个文件夹"),
+                [f"{board.path} ({board.id})" for board in candidates],
                 allow_back=True,
             )
         except MenuCancelled:
             return None
         if selected is None:
             return None
-        if selected == len(candidates):
+        if selected is None:
+            printer.emit("Folder URL, ID, name, or path:", state="next")
+            try:
+                args.board = input().strip()
+            except (EOFError, KeyboardInterrupt):
+                return None
+            if not args.board:
+                return None
             continue
         args.board = candidates[selected].id
 
@@ -2947,7 +3234,10 @@ def _command_tag_v2(args: argparse.Namespace) -> int:
             work_items.append((index, item))
     if not getattr(args, "quiet", 0):
         printer.emit(
-            f"Tagging \u201c{scope.board.path}\u201d: {len(work_items)}/{total} images",
+            tr(
+                f"Ready to scan ‘{scope.board.path}’: {len(work_items)} of {total} images to analyze",
+                f"扫描准备就绪：‘{scope.board.path}’ 中有 {total} 张图片，待分析 {len(work_items)} 张",
+            ),
             state="active",
         )
     endpoint_record = model_endpoint_record(vision)
@@ -2965,7 +3255,7 @@ def _command_tag_v2(args: argparse.Namespace) -> int:
     try:
         if work_items:
             probe_index, probe_item = work_items[0]
-            with session.wait("Checking first image"):
+            with session.wait(tr("Checking first image", "正在检查首张图片")):
                 probe = analyze_tag_item(
                     index=probe_index,
                     item=probe_item,
@@ -2995,7 +3285,9 @@ def _command_tag_v2(args: argparse.Namespace) -> int:
                 )
             remainder = work_items[1:]
             analyzed.append(probe)
-            with session.progress(len(work_items), "Analyzing") as progress:
+            with session.progress(
+                len(work_items), tr("Analyzing", "正在分析")
+            ) as progress:
                 progress.update(f"{probe.item.name}: ✓")
                 for result in run_tag_analysis(
                     work_items=remainder,
@@ -3039,7 +3331,9 @@ def _command_tag_v2(args: argparse.Namespace) -> int:
             (result for result in analyzed if result.error is None),
             key=lambda result: result.index,
         )
-        with session.progress(len(successes), "Updating Eagle") as progress:
+        with session.progress(
+            len(successes), tr("Updating Eagle", "正在更新 Eagle")
+        ) as progress:
             try:
                 for result in successes:
                     try:
@@ -3069,7 +3363,11 @@ def _command_tag_v2(args: argparse.Namespace) -> int:
                 cancelled = True
     elif not args.write and not getattr(args, "quiet", 0):
         printer.emit(
-            "Analysis complete. Eagle was not updated (dry run).", state="warning"
+            tr(
+                "Analysis complete. Eagle was not updated (dry run).",
+                "分析完成。试运行模式未修改 Eagle。",
+            ),
+            state="warning",
         )
     result = RunResult(
         scope.board.path,
@@ -3215,35 +3513,69 @@ def effective_model_config(config: dict[str, str]) -> dict[str, str]:
     }
 
 
-def _setup_prompt(printer: Printer) -> dict[str, str]:
+def _setup_prompt(
+    printer: Printer, existing: dict[str, str] | None = None
+) -> dict[str, str]:
+    existing = existing or load_user_config()
     try:
         printer.emit(
-            "Remote API: no local model install; provider charges and remote image transfer may apply."
+            tr(
+                "Remote API: no local model install; provider charges and remote image transfer may apply.",
+                "远程 API：无需本地安装模型；服务商可能收费，图片会发送至远程服务。",
+            )
         )
         printer.emit(
-            "Local Ollama: no remote model API charge; requires Ollama, a vision model, and local resources."
+            tr(
+                "Local Ollama: no remote model API charge; requires Ollama, a vision model, and local resources.",
+                "本地 Ollama：不产生远程模型调用费用；需要安装 Ollama 和视觉模型，并使用本机资源。",
+            )
         )
         protocol_index = choose(
             printer,
-            "Choose model source",
-            ["Remote API", "Ollama (local)"],
+            tr("Choose model source", "选择模型来源"),
+            [tr("Remote API", "远程 API"), tr("Ollama (local)", "Ollama（本地）")],
             default=0,
         )
         if protocol_index is None:
-            raise MoodtagError("Setup cancelled.")
+            raise SetupCancelled("Setup cancelled.")
         if protocol_index == 1:
-            printer.emit("Ollama URL (default http://127.0.0.1:11434):")
-            base_url = input().strip() or "http://127.0.0.1:11434"
+            current_url = existing.get("base_url", "") or "http://127.0.0.1:11434"
+            base_url = current_url
             probe = OllamaVisionClient(base_url=base_url, model="discovery")
-            probe.preflight()
+            try:
+                probe.preflight()
+            except CoreError:
+                printer.emit_hyperlink(
+                    tr("Download Ollama ↗", "下载 Ollama ↗"),
+                    "https://ollama.com/download/mac",
+                )
+                printer.emit(
+                    tr(
+                        f"Ollama URL [{current_url}]:",
+                        f"Ollama 地址 [{current_url}]：",
+                    )
+                )
+                base_url = input().strip() or current_url
+                probe = OllamaVisionClient(base_url=base_url, model="discovery")
+                probe.preflight()
             available = discover_ollama_vision_models(probe)
             if not available:
-                raise MoodtagError(
-                    "No installed vision-capable Ollama models were found; install one explicitly."
+                raise SetupCancelled(
+                    tr(
+                        "No installed vision-capable Ollama models were found; install one explicitly.",
+                        "没有找到已安装的 Ollama 视觉模型，请先安装兼容模型。",
+                    )
                 )
-            model_index = choose(printer, "Choose installed vision model", available)
-            if model_index is None:
-                raise MoodtagError("Setup cancelled.")
+            if len(available) == 1:
+                model_index = 0
+            else:
+                model_index = choose(
+                    printer,
+                    tr("Choose installed vision model", "选择已安装的视觉模型"),
+                    available,
+                )
+                if model_index is None:
+                    raise SetupCancelled("Setup cancelled.")
             return {
                 "source": "ollama",
                 "base_url": base_url,
@@ -3252,41 +3584,56 @@ def _setup_prompt(printer: Printer) -> dict[str, str]:
                 "api_key": "",
             }
         printer.emit(
-            "Remote API uses an endpoint, model, and API key; charges may apply."
+            tr(
+                "Remote API uses an endpoint, model, and API key; charges may apply.",
+                "远程 API 需要服务地址、模型和 API Key，服务商可能收费。",
+            )
         )
-        remote_protocol = choose(
-            printer,
-            "Choose Remote API protocol",
-            ["Chat Completions", "Responses"],
-            default=0,
+        printer.emit_hyperlink(
+            tr("Get a Recommended API Service ↗", "注册推荐 API 服务 ↗"),
+            "https://sub2.de5.net/register?aff=KBK7PER5ECUY",
         )
-        if remote_protocol is None:
-            raise MoodtagError("Setup cancelled.")
-        protocol = ("chat", "responses")[remote_protocol]
-        models = models_for_protocol(protocol)
+        models = load_model_catalog()
         model_index = choose(
             printer,
-            "Choose model",
-            [f"{entry.name} ({entry.id})" for entry in models],
+            tr("Choose Remote API model", "选择远程 API 模型"),
+            [
+                f"{entry.name} ({entry.id})"
+                + (" · recommended" if entry.recommended else "")
+                for entry in models
+            ],
             allow_back=True,
         )
         if model_index is None:
-            raise MoodtagError("Setup cancelled.")
+            raise SetupCancelled("Setup cancelled.")
         model = models[model_index].id
-        printer.emit("Service URL:")
-        base_url = input().strip()
-    except (EOFError, KeyboardInterrupt, MenuCancelled) as exc:
+        current_url = existing.get("base_url", "")
+        printer.emit(
+            tr(f"Service URL [{current_url}]:", f"服务地址 [{current_url}]：")
+            if current_url
+            else tr("Service URL:", "服务地址：")
+        )
+        base_url = input().strip() or current_url
+        protocol = protocol_for_model(model)
+    except (EOFError, KeyboardInterrupt, MenuCancelled, SetupCancelled) as exc:
         raise SetupCancelled("Setup cancelled.") from exc
     if not base_url or not model:
         raise MoodtagError("Setup cancelled.")
     base_url = normalize_base_url(base_url, protocol)
     try:
-        printer.emit("API key:")
+        printer.emit(
+            tr(
+                "API key (leave blank to keep current):",
+                "API Key（留空则沿用当前 Key）：",
+            )
+        )
         api_key = getpass.getpass("").strip()
     except (EOFError, KeyboardInterrupt) as exc:
-        raise MoodtagError("Setup cancelled.") from exc
-    if not api_key and not os.environ.get("MOODTAG_API_KEY", "").strip():
-        raise MoodtagError("Setup cancelled.")
+        raise SetupCancelled("Setup cancelled.") from exc
+    if not api_key:
+        api_key = os.environ.get("MOODTAG_API_KEY", "").strip()
+    if not api_key:
+        raise SetupCancelled("Setup cancelled.")
     return {
         "source": "openai-compatible",
         "base_url": base_url,
@@ -3314,6 +3661,18 @@ def _persist_setup(values: dict[str, str]) -> None:
     env_file = env_file_path()
     old_config = config_file.read_bytes() if config_file.exists() else None
     old_env = env_file.read_bytes() if env_file.exists() else None
+    if not values.get("api_key"):
+        saved_key = ""
+        with contextlib.suppress(OSError):
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                key, separator, raw_value = line.partition("=")
+                if separator and key.strip() == "MOODTAG_API_KEY":
+                    saved_key = parse_env_value(raw_value)
+                    break
+        values = {
+            **values,
+            "api_key": os.environ.get("MOODTAG_API_KEY", "").strip() or saved_key,
+        }
     try:
         config = load_user_config(config_file)
         profile_id = re.sub(
@@ -3371,7 +3730,7 @@ def command_config_model(args: argparse.Namespace) -> int:
         raise MoodtagError("Interactive model setup requires a TTY.")
     printer = Printer()
     try:
-        values = _setup_prompt(printer)
+        values = _setup_prompt(printer, load_user_config())
     except SetupCancelled:
         printer.emit("Model setup cancelled. Nothing changed.", state="warning")
         return 0
@@ -3382,11 +3741,6 @@ def command_config_model(args: argparse.Namespace) -> int:
     printer.emit(f"Service URL: {values['base_url']}")
     printer.emit(f"Model: {values['model']}")
     printer.emit("API key: Not required" if source == "ollama" else "API key: Ready")
-    if not prompt_yes_no(
-        "Save this model configuration?", default=False, printer=printer
-    ):
-        printer.emit("Model setup cancelled. Nothing changed.", state="warning")
-        return 0
     _persist_setup(values)
     printer.emit("Model setup saved.", state="success")
     return 0
@@ -3402,8 +3756,17 @@ def command_config_profile(args: argparse.Namespace) -> int:
         try:
             selected = choose(
                 Printer(),
-                f"Choose tagging style (current: {tagging_style_name(current)})",
-                [tagging_style_name(value) for value in profiles],
+                tr(
+                    f"Choose tagging style (current: {tagging_style_name(current)})",
+                    f"选择标注风格（当前：{tagging_style_name(current)}）",
+                ),
+                [
+                    tr(
+                        tagging_style_name(value),
+                        "通用" if value == "default" else "Editorial",
+                    )
+                    for value in profiles
+                ],
             )
         except MenuCancelled:
             return 0
@@ -3743,6 +4106,19 @@ def is_board_candidate(value: str) -> bool:
     return bool(re.fullmatch(r"[^\x00\r\n]+", candidate))
 
 
+def clip_terminal_text(value: str, max_columns: int) -> str:
+    columns = 0
+    result: list[str] = []
+    for char in value:
+        width = 2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1
+        if columns + width > max_columns:
+            result.append("…")
+            break
+        result.append(char)
+        columns += width
+    return "".join(result)
+
+
 def command_home() -> int:
     printer = Printer()
     config = load_user_config()
@@ -3755,33 +4131,29 @@ def command_home() -> int:
         and (source == "ollama" or os.environ.get("MOODTAG_API_KEY", "").strip())
     )
     configured = ready
-    ollama_health = ""
-    if source == "ollama" and ready:
-        try:
-            client = OllamaVisionClient(
-                base_url=config.get("base_url") or "http://127.0.0.1:11434",
-                model=config["model"],
-            )
-            client.version()
-            ollama_health = " · Ollama API reachable"
-        except CoreError:
-            ready = False
-            ollama_health = " · Ollama API unavailable"
-    printer.emit("Moodtag", tone="brand")
+    try:
+        version = importlib.metadata.version("eagle-app-agent")
+    except importlib.metadata.PackageNotFoundError:
+        version = ""
+    version_label = f"  v{version}" if version else ""
+    printer.emit(f"◆  MOODTAG{version_label}", tone="brand")
+    printer.emit(
+        tr("AI image tagging for Eagle", "Eagle 智能图片标注工具"), tone="secondary"
+    )
     printer.emit("")
     if configured:
         provider = "Ollama" if source == "ollama" else str(source or "Remote API")
         if provider == "openai-compatible":
             provider = "Remote API"
-        printer.emit(f"Model: {config.get('model', 'configured model')} · {provider}")
-        if ollama_health.endswith("unavailable"):
-            printer.emit("Ollama API unavailable", state="warning")
+        printer.emit(
+            f"{tr('Model', '模型')}   {clip_terminal_text(config.get('model', 'configured model'), 36)} · {provider}"
+        )
     else:
-        printer.emit("Model: Not configured", state="warning")
+        printer.emit(tr("Model   Not configured", "模型   尚未配置"), state="warning")
     current_style = config.get("profile", DEFAULT_PROFILE) or DEFAULT_PROFILE
     printer.emit_parts(
         [
-            ("Style: ", "secondary"),
+            (f"{tr('Style', '风格')}   ", "secondary"),
             (tagging_style_name(current_style), "primary"),
         ]
     )
@@ -3789,12 +4161,20 @@ def command_home() -> int:
     try:
         selected = choose(
             printer,
-            "Choose an action",
+            tr("What would you like to do?", "接下来做什么？"),
             [
-                MenuChoice("Tag images", primary=True),
-                MenuChoice("Change style", section="Settings"),
-                MenuChoice("Change model"),
+                MenuChoice(tr("Tag images", "标注图片"), primary=True),
+                MenuChoice(
+                    tr("Change style", "切换风格"),
+                    section=tr("Settings", "设置"),
+                ),
+                MenuChoice(
+                    tr("Change model", "切换模型")
+                    if configured
+                    else tr("Set up model", "配置模型")
+                ),
             ],
+            default=0,
         )
     except MenuCancelled:
         return 0
@@ -3813,8 +4193,12 @@ def command_guided_scope_flow(printer: Printer) -> int:
         try:
             choice = choose(
                 printer,
-                "Select image source",
-                ["Eagle folder", "Current selection", "Entire library"],
+                tr("Where are the images?", "图片在哪里？"),
+                [
+                    tr("Eagle folder", "Eagle 文件夹"),
+                    tr("Selected in Eagle", "Eagle 当前选中项"),
+                    tr("Entire library", "整个图库"),
+                ],
                 allow_back=True,
             )
         except MenuCancelled:
@@ -3962,7 +4346,9 @@ def main(argv: list[str] | None = None) -> int:
             if sys.stdin.isatty() and sys.stdout.isatty():
                 return command_home()
             raise MoodtagError(
-                "No board supplied. Use `moodtag <board-url-or-id>` or run from an interactive terminal."
+                "Choose a scope explicitly: `moodtag <folder-url-or-id>`, "
+                "`moodtag selected --write`, or `moodtag tag --library --write`. "
+                "Use `moodtag --help` for filters and other commands."
             )
         for value in argv:
             if value == "--api-key" or value.startswith("--api-key="):
