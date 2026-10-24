@@ -15,6 +15,7 @@ class ModelCatalogEntry:
     name: str
     protocol: str
     recommended: bool = False
+    explicit_prompt_cache: bool = False
 
 
 _RESOURCE_PROTOCOLS = {"chat.json": "chat", "responses.json": "responses"}
@@ -42,13 +43,23 @@ def load_model_catalog() -> tuple[ModelCatalogEntry, ...]:
             model_id = str(value.get("id") or "").strip()
             name = str(value.get("name") or model_id).strip()
             marker = value.get("recommended", False)
-            if not model_id or not name or not isinstance(marker, bool):
+            explicit_prompt_cache = value.get("explicit_prompt_cache", False)
+            if (
+                not model_id
+                or not name
+                or not isinstance(marker, bool)
+                or not isinstance(explicit_prompt_cache, bool)
+            ):
                 raise CoreError(f"Model catalog {resource} contains an invalid entry")
             if model_id in seen:
                 raise CoreError(f"Model catalog contains duplicate ID: {model_id}")
             seen.add(model_id)
             recommended += int(marker)
-            entries.append(ModelCatalogEntry(model_id, name, protocol, marker))
+            entries.append(
+                ModelCatalogEntry(
+                    model_id, name, protocol, marker, explicit_prompt_cache
+                )
+            )
         if recommended > 1:
             raise CoreError(f"Model catalog {resource} has multiple recommended models")
     return tuple(entries)
@@ -58,11 +69,16 @@ def models_for_protocol(protocol: str) -> tuple[ModelCatalogEntry, ...]:
     return tuple(entry for entry in load_model_catalog() if entry.protocol == protocol)
 
 
+def catalog_entry_for_model(model: str) -> ModelCatalogEntry | None:
+    value = str(model or "").strip()
+    return next((entry for entry in load_model_catalog() if entry.id == value), None)
+
+
 def protocol_for_model(model: str) -> str:
     value = str(model or "").strip()
-    for entry in load_model_catalog():
-        if entry.id == value:
-            return entry.protocol
+    entry = catalog_entry_for_model(value)
+    if entry is not None:
+        return entry.protocol
     raise CoreError(
         f"Unsupported model: {value or '-'}; run `moodtag config model` to select a supported model"
     )

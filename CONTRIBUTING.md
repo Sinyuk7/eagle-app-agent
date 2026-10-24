@@ -354,22 +354,24 @@ MOODTAG_API_KEY=... uv run python scripts/e2e_live_batch.py \
   --model vision-model
 ```
 
-The model contract is:
+The Remote request contract is:
 
 - one configured protocol: `chat` or `responses`
 - one configured base URL and model
 - image plus prompt content in protocol-specific wire shape
-- `temperature=0.6`
-- `top_p=0.85`
-- `max_tokens=1028` (`max_output_tokens` for Responses)
-- JSON response format unless `--no-response-format` is passed
+- strict JSON Schema output for supported Remote models
+- GPT-6.1 Sol Responses defaults: `reasoning.effort=low`, `store=false`, automatic
+  image detail, and omitted sampling/output-token-limit fields
+- `explicit_prompt_cache` models use explicit 30-minute Prompt Cache
+- Remote default concurrency is 10; `--concurrency` remains an override
+- successful and failed attempts retain bounded response diagnostics without secrets
 
 ### Fixed protocol matrix
 
 `scripts/e2e_protocol_matrix.py` exercises both deployed protocol shapes against
 the disposable Eagle folder `MSHGWFME8L6SJ`:
 
-- Responses: `gpt-5.6-luna` through `https://sub2.de5.net/v1/responses`
+- Responses: `gpt-6.1-sol` through `https://sub2.de5.net/v1/responses`
 - Chat Completions: `qwen3.5-122b-a10b` through `https://llm-api.net/v1/chat/completions`
 
 API keys are runtime-only. Do not add them to source files, command arguments,

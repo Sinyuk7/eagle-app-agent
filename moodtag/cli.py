@@ -51,6 +51,7 @@ from moodtag_core.contract import (
     CoreError,
     MoodtagAnalysis,
 )
+from moodtag_core.envelope import normalize_usage
 from moodtag_core.prompts import resolve_profile
 from moodtag_core.provider import (
     OllamaVisionClient,
@@ -81,7 +82,7 @@ from .ui.spinner import spinner
 
 DEFAULT_EAGLE_API = "http://localhost:41595"
 DEFAULT_IMAGE_EDGE = 768
-DEFAULT_CONCURRENCY = 5
+DEFAULT_CONCURRENCY = 10
 DEFAULT_MAX_TAGS = 15
 DEFAULT_RETRIES = 2
 DEFAULT_USER_AGENT = "moodtag/0.1"
@@ -1798,7 +1799,27 @@ def model_endpoint_record(vision: Any) -> dict[str, Any]:
     model = str(getattr(vision, "last_endpoint_model", "") or "")
     if not protocol and not base_url and not model:
         return {}
-    return {"protocol": protocol, "base_url": base_url, "model": model}
+    response = getattr(vision, "last_response", None)
+    metadata = getattr(response, "metadata", None)
+    response_metadata: dict[str, Any] = {}
+    if metadata is not None:
+        response_metadata = {
+            "response_id": getattr(metadata, "response_id", None),
+            "request_id": getattr(metadata, "request_id", None),
+            "client_request_id": getattr(metadata, "client_request_id", None),
+            "status": getattr(metadata, "status", None),
+            "http_status": getattr(metadata, "http_status", None),
+            "usage": dict(getattr(metadata, "usage", {}) or {}),
+            "usage_normalized": normalize_usage(getattr(metadata, "usage", {})),
+            "headers": dict(getattr(metadata, "headers", {}) or {}),
+            "elapsed_ms": getattr(metadata, "elapsed_ms", None),
+        }
+    return {
+        "protocol": protocol,
+        "base_url": base_url,
+        "model": model,
+        "response": response_metadata,
+    }
 
 
 def model_attempt_records(vision: Any) -> list[dict[str, Any]]:
@@ -1814,6 +1835,9 @@ def model_attempt_records(vision: Any) -> list[dict[str, Any]]:
                     "elapsed_ms": attempt.get("elapsed_ms", 0),
                     "status": attempt.get("status"),
                     "error": redact(str(attempt.get("error", ""))),
+                    "submission_state": attempt.get("submission_state", "not_sent"),
+                    "client_request_id": attempt.get("client_request_id"),
+                    "headers": dict(attempt.get("headers", {}) or {}),
                 }
             )
             continue
@@ -1826,6 +1850,9 @@ def model_attempt_records(vision: Any) -> list[dict[str, Any]]:
                 "elapsed_ms": getattr(attempt, "elapsed_ms", 0),
                 "status": getattr(attempt, "status", None),
                 "error": redact(str(getattr(attempt, "error", ""))),
+                "submission_state": getattr(attempt, "submission_state", "not_sent"),
+                "client_request_id": getattr(attempt, "client_request_id", None),
+                "headers": dict(getattr(attempt, "headers", {}) or {}),
             }
         )
     return records

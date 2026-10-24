@@ -43,7 +43,6 @@ class ProtocolMatrixSafetyTests(unittest.TestCase):
             [profile["endpoint_url"] for profile in payload["profiles"]],
             [
                 "https://sub2.de5.net/v1/responses",
-                "https://sub2.de5.net/v1/responses",
                 "https://llm-api.net/v1/chat/completions",
             ],
         )

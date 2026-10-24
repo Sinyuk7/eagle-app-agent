@@ -9,6 +9,12 @@ import sys  # noqa: F401  (legacy monkeypatch path)
 import time  # noqa: F401  (legacy monkeypatch path)
 
 from .common import *  # noqa: F401,F403
+from .envelope import (  # noqa: F401
+    ResponseEnvelope,
+    ResponseMetadata,
+    estimate_cost,
+    normalize_usage,
+)
 from .ollama import (  # noqa: F401
     OLLAMA_PRESETS,
     OllamaVisionClient,

@@ -2,6 +2,7 @@
   {
     "id": "gpt-6.1-sol",
     "name": "GPT-6.1 Sol",
-    "recommended": true
+    "recommended": true,
+    "explicit_prompt_cache": true
   }
 ]

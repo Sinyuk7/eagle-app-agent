@@ -9,7 +9,7 @@ import re
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -50,15 +50,32 @@ class ProviderAttempt:
     elapsed_ms: int
     status: int | None = None
     error: str = ""
+    submission_state: str = "not_sent"
+    client_request_id: str | None = None
+    headers: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class HTTPResponse:
+    data: Any
+    status: int
+    headers: dict[str, str]
 
 
 class ProviderHTTPError(CoreError):
     def __init__(
-        self, status: int, url: str, body: str, *, secret: str | None = None
+        self,
+        status: int,
+        url: str,
+        body: str,
+        *,
+        secret: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         self.status = status
         self.url = url
         self.body = redact(body, secret)
+        self.headers = normalize_response_headers(headers or {})
         self.error_code, self.error_message = parse_provider_error(self.body)
         super().__init__(f"HTTP {status} from {url}: {self.body[:800]}")
 
@@ -67,7 +84,13 @@ class ProviderAuthenticationError(ProviderHTTPError):
     """The configured credential was rejected by the endpoint."""
 
     def __init__(self, endpoint: ProviderEndpoint, error: ProviderHTTPError) -> None:
-        super().__init__(error.status, error.url, error.body, secret=endpoint.api_key)
+        super().__init__(
+            error.status,
+            error.url,
+            error.body,
+            secret=endpoint.api_key,
+            headers=error.headers,
+        )
         self.endpoint = endpoint
         host = urllib.parse.urlsplit(endpoint.base_url).netloc or endpoint.base_url
         self.args = (
@@ -181,6 +204,51 @@ def http_request(
     timeout: int = 60,
     secret: str | None = None,
 ) -> Any:
+    return http_request_with_metadata(
+        method,
+        url,
+        headers=headers,
+        json_body=json_body,
+        timeout=timeout,
+        secret=secret,
+    ).data
+
+
+_RESPONSE_HEADER_NAMES = {
+    "request-id",
+    "x-request-id",
+    "retry-after",
+    "openai-processing-ms",
+    "x-processing-ms",
+}
+
+
+def normalize_response_headers(headers: Any) -> dict[str, str]:
+    """Keep only bounded, non-sensitive provider diagnostics."""
+    if not hasattr(headers, "items"):
+        return {}
+    result: dict[str, str] = {}
+    for raw_name, raw_value in headers.items():
+        name = str(raw_name).strip().lower()
+        if not (
+            name in _RESPONSE_HEADER_NAMES
+            or name.startswith("x-ratelimit-")
+            or name.startswith("ratelimit-")
+        ):
+            continue
+        result[name] = str(raw_value).strip()[:200]
+    return result
+
+
+def http_request_with_metadata(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    json_body: Any | None = None,
+    timeout: int = 60,
+    secret: str | None = None,
+) -> HTTPResponse:
     request_headers = dict(headers or {})
     request_headers.setdefault(
         "User-Agent", os.environ.get("MOODTAG_USER_AGENT", DEFAULT_USER_AGENT)
@@ -193,20 +261,29 @@ def http_request(
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8")
+            status = int(getattr(resp, "status", 200))
+            response_headers = normalize_response_headers(resp.headers)
     except urllib.error.HTTPError as exc:
         try:
             detail = exc.read().decode("utf-8", errors="replace")
         except OSError:
             detail = ""
-        raise ProviderHTTPError(exc.code, url, detail, secret=secret) from exc
+        raise ProviderHTTPError(
+            exc.code,
+            url,
+            detail,
+            secret=secret,
+            headers=normalize_response_headers(exc.headers),
+        ) from exc
     except urllib.error.URLError as exc:
         raise ProviderNetworkError(url, exc.reason, secret=secret) from exc
     if not raw:
-        return None
+        return HTTPResponse(None, status, response_headers)
     try:
-        return json.loads(raw)
+        data = json.loads(raw)
     except json.JSONDecodeError:
-        return raw
+        data = raw
+    return HTTPResponse(data, status, response_headers)
 
 
 def elapsed_ms_since(started: float) -> int:

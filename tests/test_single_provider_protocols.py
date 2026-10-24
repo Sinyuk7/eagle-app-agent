@@ -10,7 +10,9 @@ from pathlib import Path
 from unittest import mock
 
 from moodtag import cli
+from moodtag_core.common import HTTPResponse
 from moodtag_core.contract import CoreError
+from moodtag_core.envelope import estimate_cost, normalize_usage
 from moodtag_core.provider import (
     OllamaVisionClient,
     VisionClient,
@@ -116,6 +118,43 @@ class SingleProviderProtocolTests(unittest.TestCase):
         self.assertNotIn("response_format", payload)
         self.assertEqual(payload["input"][1]["content"][1]["type"], "input_image")
 
+    def test_gpt_sol_payload_uses_strict_schema_and_prompt_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "image.jpg"
+            image.write_bytes(b"jpeg")
+            client = VisionClient(
+                protocol="responses",
+                base_url="https://api.openai.com/v1",
+                model="gpt-6.1-sol",
+                api_key="custom-secret",
+            )
+            payload = client.build_payload(image, {"style": ["portrait"]})
+        self.assertEqual(payload["reasoning"], {"effort": "low"})
+        self.assertNotIn("temperature", payload)
+        self.assertNotIn("top_p", payload)
+        self.assertNotIn("max_output_tokens", payload)
+        self.assertEqual(
+            payload["prompt_cache_options"], {"mode": "explicit", "ttl": "30m"}
+        )
+        self.assertEqual(payload["text"]["format"]["type"], "json_schema")
+        self.assertTrue(payload["text"]["format"]["strict"])
+        self.assertEqual(payload["input"][0]["role"], "developer")
+        self.assertEqual(payload["input"][1]["content"][1]["detail"], "auto")
+
+    def test_custom_endpoint_does_not_assume_prompt_cache_support(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "image.jpg"
+            image.write_bytes(b"jpeg")
+            client = VisionClient(
+                protocol="responses",
+                base_url="https://sub2.de5.net/v1",
+                model="gpt-6.1-sol",
+                api_key="custom-secret",
+            )
+            payload = client.build_payload(image, {})
+        self.assertNotIn("prompt_cache_options", payload)
+        self.assertEqual(payload["input"][0]["role"], "system")
+
     def test_json_mode_can_be_disabled_for_both_protocols(self):
         with tempfile.TemporaryDirectory() as directory:
             image = Path(directory) / "image.jpg"
@@ -183,6 +222,7 @@ class SingleProviderProtocolTests(unittest.TestCase):
                     }
                 else:
                     response = {
+                        "status": "completed",
                         "output": [
                             {
                                 "type": "message",
@@ -190,7 +230,7 @@ class SingleProviderProtocolTests(unittest.TestCase):
                                     {"type": "output_text", "text": json.dumps(payload)}
                                 ],
                             }
-                        ]
+                        ],
                     }
                 encoded = json.dumps(response).encode()
                 self.send_response(200)
@@ -226,6 +266,108 @@ class SingleProviderProtocolTests(unittest.TestCase):
         )
         self.assertIn("messages", requests[0][1])
         self.assertIn("input", requests[1][1])
+
+    def test_remote_envelope_preserves_response_metadata(self):
+        payload = self.analysis_payload()
+        response = {
+            "id": "resp_test",
+            "status": "completed",
+            "usage": {"input_tokens": 10, "output_tokens": 4},
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": json.dumps(payload)}],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "image.jpg"
+            image.write_bytes(b"jpeg")
+            client = VisionClient(
+                protocol="responses",
+                base_url="https://example.test/v1",
+                model="vision",
+                api_key="custom-secret",
+            )
+            with mock.patch(
+                "moodtag_core.remote.http_request_with_metadata",
+                return_value=HTTPResponse(
+                    response,
+                    200,
+                    {
+                        "X-Request-ID": "req_test",
+                        "Retry-After": "2",
+                        "Authorization": "Bearer secret",
+                    },
+                ),
+            ):
+                envelope = client.analyze_envelope(image, {}, retries=0, max_tags=3)
+        self.assertEqual(envelope.data.brief, "brief")
+        self.assertEqual(envelope.metadata.response_id, "resp_test")
+        self.assertEqual(envelope.metadata.status, "completed")
+        self.assertEqual(envelope.metadata.http_status, 200)
+        self.assertEqual(envelope.metadata.usage["input_tokens"], 10)
+        self.assertEqual(
+            envelope.metadata.headers, {"x-request-id": "req_test", "retry-after": "2"}
+        )
+        self.assertEqual(client.last_attempts[-1].submission_state, "response_received")
+
+    def test_incomplete_responses_are_rejected_before_business_parse(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "image.jpg"
+            image.write_bytes(b"jpeg")
+            client = VisionClient(
+                protocol="responses",
+                base_url="https://example.test/v1",
+                model="vision",
+                api_key="custom-secret",
+            )
+            with (
+                mock.patch(
+                    "moodtag_core.remote.http_request_with_metadata",
+                    return_value=HTTPResponse(
+                        {
+                            "status": "incomplete",
+                            "incomplete_details": {"reason": "length"},
+                        },
+                        200,
+                        {},
+                    ),
+                ),
+                self.assertRaisesRegex(CoreError, "did not complete"),
+            ):
+                client.analyze(image, {}, retries=0, max_tags=3)
+        self.assertEqual(client.last_attempts[-1].submission_state, "response_received")
+
+    def test_chat_non_success_finish_reason_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "image.jpg"
+            image.write_bytes(b"jpeg")
+            client = VisionClient(
+                protocol="chat",
+                base_url="https://example.test/v1",
+                model="vision",
+                api_key="custom-secret",
+            )
+            with (
+                mock.patch(
+                    "moodtag_core.remote.http_request_with_metadata",
+                    return_value=HTTPResponse(
+                        {
+                            "choices": [
+                                {
+                                    "finish_reason": "length",
+                                    "message": {"content": "{}"},
+                                }
+                            ]
+                        },
+                        200,
+                        {},
+                    ),
+                ),
+                self.assertRaisesRegex(CoreError, "finish_reason=length"),
+            ):
+                client.analyze(image, {}, retries=0, max_tags=3)
 
     def test_ollama_native_payload_and_local_response(self):
         requests: list[tuple[str, dict[str, object]]] = []
@@ -388,7 +530,8 @@ class SingleProviderProtocolTests(unittest.TestCase):
                 Handler.calls += 1
                 requests.append(self.path)
                 if Handler.calls == 1:
-                    self.send_response(500)
+                    self.send_response(429)
+                    self.send_header("Retry-After", "2")
                     self.end_headers()
                     return
                 encoded = json.dumps(
@@ -409,7 +552,7 @@ class SingleProviderProtocolTests(unittest.TestCase):
         try:
             with (
                 tempfile.TemporaryDirectory() as directory,
-                mock.patch("moodtag_core.provider.time.sleep"),
+                mock.patch("moodtag_core.remote.time.sleep") as sleep,
             ):
                 image = Path(directory) / "image.jpg"
                 image.write_bytes(b"jpeg")
@@ -424,10 +567,39 @@ class SingleProviderProtocolTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
         self.assertEqual(requests, ["/v1/chat/completions", "/v1/chat/completions"])
+        sleep.assert_called_once_with(2.0)
 
     def test_redaction_scrubs_arbitrary_secret(self):
         self.assertNotIn(
             "custom-secret", redact("provider said custom-secret", "custom-secret")
+        )
+
+    def test_usage_normalization_and_cost_require_known_prices(self):
+        usage = {
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "input_tokens_details": {"cached_tokens": 40, "cache_write_tokens": 6},
+            "output_tokens_details": {"reasoning_tokens": 5},
+        }
+        self.assertEqual(
+            normalize_usage(usage),
+            {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "cached_tokens": 40,
+                "cache_write_tokens": 6,
+                "reasoning_tokens": 5,
+            },
+        )
+        self.assertIsNone(estimate_cost(usage))
+        self.assertAlmostEqual(
+            estimate_cost(
+                usage,
+                input_per_million=1.0,
+                output_per_million=2.0,
+                cached_per_million=0.1,
+            ),
+            0.000104,
         )
 
     def test_model_config_rolls_back_when_credential_write_fails(self):

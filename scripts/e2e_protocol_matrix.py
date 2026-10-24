@@ -37,17 +37,10 @@ class LiveProfile:
 
 PROFILES = (
     LiveProfile(
-        name="responses-gpt-5.6-luna",
+        name="responses-gpt-6.1-sol",
         protocol="responses",
         base_url="https://sub2.de5.net",
-        model="gpt-5.6-luna",
-        api_key_env="MOODTAG_E2E_RESPONSES_API_KEY",
-    ),
-    LiveProfile(
-        name="responses-gpt-5.6-terra",
-        protocol="responses",
-        base_url="https://sub2.de5.net",
-        model="gpt-5.6-terra",
+        model="gpt-6.1-sol",
         api_key_env="MOODTAG_E2E_RESPONSES_API_KEY",
     ),
     LiveProfile(
