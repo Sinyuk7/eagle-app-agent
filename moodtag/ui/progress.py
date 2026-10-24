@@ -61,10 +61,9 @@ class Progress:
                     self.total,
                     title=self.label,
                     file=self.printer.stream,
-                    # Throughput is an implementation detail (completed
-                    # items per second), and is easy to mistake for API
-                    # latency. Keep the useful ETA without showing `/s`.
-                    stats="(~{eta})",
+                    # Make the throughput unit explicit: this is completed
+                    # images per second, not per-request API latency.
+                    stats="(~{eta}, {rate:.1f} images/s)",
                 )
                 self._update = self._bar.__enter__()
             except ImportError:
