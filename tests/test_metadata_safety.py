@@ -28,6 +28,7 @@ def analysis() -> MoodtagAnalysis:
         key="portrait",
         camera="eye level",
         light_color="soft light",
+        suggest_title="",
     )
 
 
@@ -58,6 +59,7 @@ class MetadataSafetyTests(unittest.TestCase):
                 key="portrait",
                 camera="eye level",
                 light_color="hard light",
+                suggest_title="",
             )
         )
         replaced = replace_analysis_annotation(old, new)
@@ -96,6 +98,84 @@ class MetadataSafetyTests(unittest.TestCase):
         self.assertEqual(write_analysis_result(Eagle(), result), "changed")
         self.assertEqual(updates[0][1]["tags"], ["old", "new-manual", "ai"])
         self.assertIn("manual latest", updates[0][1]["annotation"])
+
+    def test_write_applies_valid_suggestion_with_original_extension(self):
+        item = EagleItem("1", "1.jpg", "jpg", [], [], "")
+        result = TagItemResult(
+            index=1,
+            item=item,
+            tags=[],
+            annotation=build_annotation_block(analysis()),
+            suggested_title="黑色皮革夹克",
+        )
+        updates = []
+
+        class Eagle:
+            def item_info(self, _item_id):
+                return item
+
+            def update_item(self, item_id, **kwargs):
+                updates.append((item_id, kwargs))
+
+        write_analysis_result(Eagle(), result)
+        self.assertEqual(updates[0][1]["name"], "黑色皮革夹克.jpg")
+
+    def test_write_skips_rename_when_name_changed_or_suggestion_invalid(self):
+        analyzed = EagleItem("1", "1.jpg", "jpg", [], [], "")
+        latest = EagleItem("1", "human-title.jpg", "jpg", [], [], "")
+        result = TagItemResult(
+            index=1,
+            item=analyzed,
+            annotation=build_annotation_block(analysis()),
+            suggested_title="unsafe/name",
+        )
+        updates = []
+
+        class Eagle:
+            def item_info(self, _item_id):
+                return latest
+
+            def update_item(self, item_id, **kwargs):
+                updates.append(kwargs)
+
+        write_analysis_result(Eagle(), result)
+        self.assertNotIn("name", updates[0])
+
+    def test_write_skips_invalid_title_but_keeps_metadata_update(self):
+        item = EagleItem("1", "1.jpg", "jpg", [], [], "")
+        result = TagItemResult(
+            index=1,
+            item=item,
+            tags=["ai"],
+            annotation=build_annotation_block(analysis()),
+            suggested_title="bad:name",
+        )
+        updates = []
+
+        class Eagle:
+            def item_info(self, _item_id):
+                return item
+
+            def update_item(self, item_id, **kwargs):
+                updates.append(kwargs)
+
+        write_analysis_result(Eagle(), result)
+        self.assertNotIn("name", updates[0])
+        self.assertIn("ai", updates[0]["tags"])
+        self.assertIn("Brief:", updates[0]["annotation"])
+
+    def test_update_item_uses_v2_and_omits_unspecified_name(self):
+        with mock.patch(
+            "moodtag.cli.http_request", return_value={"status": "success"}
+        ) as req:
+            EagleClient("http://eagle.test").update_item(
+                "item", tags=["x"], annotation="a"
+            )
+        self.assertTrue(req.call_args.args[1].endswith("/api/v2/item/update"))
+        self.assertEqual(
+            req.call_args.kwargs["json_body"],
+            {"id": "item", "tags": ["x"], "annotation": "a"},
+        )
 
     def test_v2_list_items_paginates(self):
         def page(count, offset):

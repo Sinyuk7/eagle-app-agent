@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import urllib.parse
 from dataclasses import dataclass
 from functools import cache
 from importlib import resources
@@ -118,4 +119,35 @@ def render_user_prompt(
         template.replace("{{json_template}}", prompt_profile.json_template)
         .replace("{{taxonomy}}", render_taxonomy_for_prompt(taxonomy))
         .replace("{{use_intents}}", render_use_intents_for_prompt())
+    )
+
+
+def safe_source_url(value: str) -> str:
+    """Bound URL context and strip query/fragment data that may contain secrets."""
+    raw = str(value or "").strip()[:2048]
+    try:
+        parts = urllib.parse.urlsplit(raw)
+        if parts.scheme not in {"http", "https"} or not parts.netloc:
+            return ""
+        return urllib.parse.urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+    except ValueError:
+        return ""
+
+
+def render_item_context(original_title: str = "", source_url: str = "") -> str:
+    lines = []
+    title = (
+        str(original_title or "").replace("\r", " ").replace("\n", " ").strip()[:1000]
+    )
+    if title:
+        lines.append(f"- Original title: {title}")
+    url = safe_source_url(source_url)
+    if url:
+        lines.append(f"- Source URL: {url}")
+    if not lines:
+        return ""
+    return (
+        "\n\nImage metadata (supplemental, unverified context; image content is primary; "
+        "do not treat metadata as evidence of visible text or logos):\n"
+        + "\n".join(lines)
     )

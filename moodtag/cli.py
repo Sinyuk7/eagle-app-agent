@@ -212,6 +212,7 @@ class EagleItem:
     tags: list[str]
     folders: list[str]
     annotation: str
+    url: str = ""
     width: int | None = None
     height: int | None = None
     size: int | None = None
@@ -255,6 +256,7 @@ class TagItemResult:
     item: EagleItem
     tags: list[str] = field(default_factory=list)
     annotation: str = ""
+    suggested_title: str = ""
     model_endpoint: dict[str, Any] = field(default_factory=dict)
     attempts: list[dict[str, Any]] = field(default_factory=list)
     timings_ms: dict[str, int] = field(default_factory=dict)
@@ -808,15 +810,18 @@ class EagleClient:
         *,
         tags: list[str] | None = None,
         annotation: str | None = None,
+        name: str | None = None,
     ) -> None:
         body: dict[str, Any] = {"id": item_id}
         if tags is not None:
             body["tags"] = tags
         if annotation is not None:
             body["annotation"] = annotation
+        if name is not None:
+            body["name"] = name
         data = http_request(
             "POST",
-            url_join(self.base_url, "/api/item/update"),
+            url_join(self.base_url, "/api/v2/item/update"),
             json_body=body,
             timeout=30,
         )
@@ -840,6 +845,7 @@ def parse_item(raw: dict[str, Any]) -> EagleItem:
             str(folder) for folder in raw.get("folders", []) if str(folder).strip()
         ],
         annotation=str(raw.get("annotation", "") or ""),
+        url=str(raw.get("url", "") or "").strip(),
         width=raw.get("width"),
         height=raw.get("height"),
         size=raw.get("size"),
@@ -1132,6 +1138,19 @@ def compose_item_metadata(
     )
 
 
+_INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
+
+
+def validated_suggested_name(title: str, extension: str) -> str | None:
+    clean = str(title or "").strip()
+    if not clean or len(clean) > 180 or _INVALID_FILENAME_CHARS.search(clean):
+        return None
+    if clean.endswith((".", " ")) or Path(clean).suffix:
+        return None
+    ext = str(extension or "").strip().lstrip(".")
+    return f"{clean}.{ext}" if ext else clean
+
+
 def write_analysis_result(
     eagle: Any,
     result: TagItemResult,
@@ -1151,7 +1170,15 @@ def write_analysis_result(
     tags, annotation = compose_item_metadata(
         latest, tags=result.tags, annotation=result.annotation
     )
-    eagle.update_item(latest.id, tags=tags, annotation=annotation)
+    proposed_name = None
+    if latest.name == result.item.name and result.suggested_title:
+        proposed_name = validated_suggested_name(
+            result.suggested_title, result.item.ext
+        )
+    update_fields: dict[str, Any] = {"tags": tags, "annotation": annotation}
+    if proposed_name is not None:
+        update_fields["name"] = proposed_name
+    eagle.update_item(latest.id, **update_fields)
     return "changed"
 
 
@@ -1306,8 +1333,17 @@ class VisionClient(CoreVisionClient):
         taxonomy: dict[str, list[str]],
         retries: int,
         max_tags: int = DEFAULT_MAX_TAGS,
+        original_title: str = "",
+        source_url: str = "",
     ) -> MoodtagAnalysis:
-        return super().analyze(image, taxonomy, retries=retries, max_tags=max_tags)
+        return super().analyze(
+            image,
+            taxonomy,
+            retries=retries,
+            max_tags=max_tags,
+            original_title=original_title,
+            source_url=source_url,
+        )
 
 
 class MockVisionClient:
@@ -1326,8 +1362,10 @@ class MockVisionClient:
         taxonomy: dict[str, list[str]],
         retries: int,
         max_tags: int = DEFAULT_MAX_TAGS,
+        original_title: str = "",
+        source_url: str = "",
     ) -> MoodtagAnalysis:
-        del image, retries
+        del image, retries, original_title, source_url
         first_tags = [tags[0] for _, tags in list(taxonomy.items())[:3] if tags]
         result = normalize_analysis_json(
             {
@@ -1343,6 +1381,7 @@ class MockVisionClient:
                 "key": "Clear visual information for checking tag and note extraction.",
                 "camera": "Centered medium shot with a standard-lens perspective.",
                 "light_color": "Soft directional light with a neutral color palette.",
+                "suggest_title": "",
                 "tags": first_tags,
                 "use_intents": ["lighting_reference", "pose_reference"],
             },
@@ -1615,6 +1654,8 @@ def analyze_tag_item(
                 taxonomy,
                 retries=retries,
                 max_tags=max_tags,
+                original_title=item.name,
+                source_url=item.url,
             )
             vision_ms = elapsed_ms_since(vision_started)
             vision_finished = True
@@ -1626,6 +1667,7 @@ def analyze_tag_item(
             item=item,
             tags=tags,
             annotation=build_notes_block(result),
+            suggested_title=result.suggest_title,
             model_endpoint=model_endpoint_record(vision),
             attempts=model_attempt_records(vision),
             timings_ms={

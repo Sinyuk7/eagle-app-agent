@@ -129,6 +129,9 @@ def normalize_analysis_json(
     commercial_format_confidence = normalize_commercial_confidence(
         data.get("commercial_format_confidence", "not_assessed")
     )
+    suggest_title = data.get("suggest_title")
+    if not isinstance(suggest_title, str):
+        raise CoreError("Model result field suggest_title must be a string")
 
     raw_tags = data.get("tags", [])
     if not isinstance(raw_tags, list):
@@ -154,6 +157,7 @@ def normalize_analysis_json(
         key=fields["key"],
         camera=fields["camera"],
         light_color=fields["light_color"],
+        suggest_title=collapse_lines(suggest_title).strip(),
         visible_text=commercial_lists["visible_text"],
         brand_evidence=commercial_lists["brand_evidence"],
         product_categories=commercial_lists["product_categories"],

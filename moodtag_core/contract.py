@@ -47,13 +47,13 @@ ANNOTATION_LABELS = {
 }
 DEFAULT_JSON_TEMPLATE = (
     '{"brief":"","elements":[],"use":"","key":"","camera":"",'
-    '"light_color":"","tags":[],"use_intents":[]}'
+    '"light_color":"","suggest_title":"","tags":[],"use_intents":[]}'
 )
 EDITORIAL_JSON_TEMPLATE = (
     '{"brief":"","elements":[],"use":"","key":"","camera":"",'
     '"light_color":"","visible_text":[],"brand_evidence":[],'
     '"product_categories":[],"commercial_format_confidence":"not_assessed",'
-    '"tags":[],"use_intents":[]}'
+    '"suggest_title":"","tags":[],"use_intents":[]}'
 )
 JSON_TEMPLATE = DEFAULT_JSON_TEMPLATE
 
@@ -83,6 +83,7 @@ class MoodtagAnalysis:
     key: str
     camera: str
     light_color: str
+    suggest_title: str
     visible_text: list[str] = field(default_factory=list)
     brand_evidence: list[str] = field(default_factory=list)
     product_categories: list[str] = field(default_factory=list)

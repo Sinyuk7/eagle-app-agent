@@ -23,7 +23,7 @@ from .common import (
 from .contract import (
     MoodtagAnalysis,
 )
-from .prompts import read_system_prompt, render_user_prompt
+from .prompts import read_system_prompt, render_item_context, render_user_prompt
 from .response import parse_analysis_response, parse_json_content
 from .schema import moodtag_json_schema, validate_json_schema
 
@@ -183,7 +183,12 @@ class OllamaVisionClient:
             )
 
     def build_payload(
-        self, image: Path, taxonomy: dict[str, list[str]]
+        self,
+        image: Path,
+        taxonomy: dict[str, list[str]],
+        *,
+        original_title: str = "",
+        source_url: str = "",
     ) -> dict[str, Any]:
         return {
             "model": self.model,
@@ -191,7 +196,8 @@ class OllamaVisionClient:
                 {"role": "system", "content": read_system_prompt(profile=self.profile)},
                 {
                     "role": "user",
-                    "content": render_user_prompt(taxonomy, profile=self.profile),
+                    "content": render_user_prompt(taxonomy, profile=self.profile)
+                    + render_item_context(original_title, source_url),
                     "images": [base64.b64encode(image.read_bytes()).decode("ascii")],
                 },
             ],
@@ -202,7 +208,14 @@ class OllamaVisionClient:
         }
 
     def analyze(
-        self, image: Path, taxonomy: dict[str, list[str]], retries: int, max_tags: int
+        self,
+        image: Path,
+        taxonomy: dict[str, list[str]],
+        retries: int,
+        max_tags: int,
+        *,
+        original_title: str = "",
+        source_url: str = "",
     ) -> MoodtagAnalysis:
         self.preflight()
         if self.local_only:
@@ -255,7 +268,15 @@ class OllamaVisionClient:
         last_error: Exception | None = None
         for attempt in range(min(max(0, retries), 2) + 1):
             try:
-                data = self._request("/api/chat", self.build_payload(image, taxonomy))
+                data = self._request(
+                    "/api/chat",
+                    self.build_payload(
+                        image,
+                        taxonomy,
+                        original_title=original_title,
+                        source_url=source_url,
+                    ),
+                )
                 if not isinstance(data, dict) or data.get("done") is not True:
                     raise CoreError("Ollama response did not finish normally")
                 reason = str(data.get("done_reason", "stop"))

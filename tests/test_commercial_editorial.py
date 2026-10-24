@@ -20,6 +20,7 @@ def legacy_payload() -> dict[str, object]:
         "key": "无品牌证据，黑白服装对比与大面积留白。",
         "camera": "半身平视，右侧留白。",
         "light_color": "柔和正面光，黑白中性色。",
+        "suggest_title": "",
         "tags": ["photo"],
         "use_intents": [],
     }
@@ -45,6 +46,17 @@ class CommercialEditorialTests(unittest.TestCase):
         self.assertIn('"brand_evidence"', editorial_prompt)
         self.assertIn('"product_categories"', editorial_prompt)
         self.assertIn('"commercial_format_confidence"', editorial_prompt)
+
+    def test_title_rules_identify_uninformative_names_in_both_profiles(self):
+        for profile in ("default", "editorial"):
+            prompt = render_user_prompt(self.taxonomy, profile=profile)
+            self.assertIn('"收藏到 Campaign"', prompt)
+            self.assertIn('"搜索结果页面"', prompt)
+            self.assertIn('"Celine"', prompt)
+            self.assertIn(
+                "Return an empty string only when the original title is already informative",
+                prompt,
+            )
 
     def test_legacy_payload_keeps_default_commercial_values_out_of_annotation(self):
         analysis = normalize_analysis_json(
@@ -151,6 +163,32 @@ class CommercialEditorialTests(unittest.TestCase):
         payload = {**legacy_payload(), "commercial_format_confidence": "high"}
         with self.assertRaisesRegex(CoreError, "commercial_format_confidence"):
             normalize_analysis_json(payload, taxonomy=self.taxonomy, max_tags=15)
+
+    def test_suggest_title_is_strict_but_may_be_empty(self):
+        payload = legacy_payload()
+        payload["suggest_title"] = ""
+        result = normalize_analysis_json(payload, taxonomy=self.taxonomy, max_tags=15)
+        self.assertEqual(result.suggest_title, "")
+        for invalid in (None, 42):
+            with (
+                self.subTest(invalid=invalid),
+                self.assertRaisesRegex(CoreError, "suggest_title"),
+            ):
+                normalize_analysis_json(
+                    {**payload, "suggest_title": invalid},
+                    taxonomy=self.taxonomy,
+                    max_tags=15,
+                )
+        with self.assertRaisesRegex(CoreError, "suggest_title"):
+            normalize_analysis_json(
+                {
+                    key: value
+                    for key, value in payload.items()
+                    if key != "suggest_title"
+                },
+                taxonomy=self.taxonomy,
+                max_tags=15,
+            )
 
     def test_taxonomy_rejects_duplicate_tag_across_facets(self):
         with self.assertRaisesRegex(CoreError, "appears in both"):

@@ -35,7 +35,12 @@ from .contract import (
     MoodtagAnalysis,
 )
 from .envelope import ResponseEnvelope, ResponseMetadata
-from .prompts import read_system_prompt, render_user_prompt, resolve_profile
+from .prompts import (
+    read_system_prompt,
+    render_item_context,
+    render_user_prompt,
+    resolve_profile,
+)
 from .response import parse_analysis_response
 from .schema import moodtag_json_schema
 
@@ -125,10 +130,17 @@ class VisionClient:
         return ProviderEndpoint(self.protocol, self.base_url, self.api_key, self.model)
 
     def build_payload(
-        self, image: Path, taxonomy: dict[str, list[str]]
+        self,
+        image: Path,
+        taxonomy: dict[str, list[str]],
+        *,
+        original_title: str = "",
+        source_url: str = "",
     ) -> dict[str, Any]:
         system = read_system_prompt(profile=self.profile)
         prompt = render_user_prompt(taxonomy, profile=self.profile)
+        item_context = render_item_context(original_title, source_url)
+        dynamic_prompt = f"{prompt}{item_context}"
         if self.protocol == "chat":
             if self.explicit_prompt_cache:
                 stable = f"{system}\n\n{prompt}"
@@ -146,7 +158,10 @@ class VisionClient:
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": "Analyze this image."},
+                            {
+                                "type": "text",
+                                "text": f"Analyze this image.{item_context}",
+                            },
                             {
                                 "type": "image_url",
                                 "image_url": {
@@ -163,7 +178,7 @@ class VisionClient:
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": prompt},
+                            {"type": "text", "text": dynamic_prompt},
                             {
                                 "type": "image_url",
                                 "image_url": {
@@ -211,7 +226,10 @@ class VisionClient:
                 {
                     "role": "user",
                     "content": [
-                        {"type": "input_text", "text": "Analyze this image."},
+                        {
+                            "type": "input_text",
+                            "text": f"Analyze this image.{item_context}",
+                        },
                         {
                             "type": "input_image",
                             "image_url": file_to_data_url(image, "image/jpeg"),
@@ -226,7 +244,7 @@ class VisionClient:
                 {
                     "role": "user",
                     "content": [
-                        {"type": "input_text", "text": prompt},
+                        {"type": "input_text", "text": dynamic_prompt},
                         {
                             "type": "input_image",
                             "image_url": file_to_data_url(image, "image/jpeg"),
@@ -255,12 +273,33 @@ class VisionClient:
         return payload
 
     def analyze(
-        self, image: Path, taxonomy: dict[str, list[str]], retries: int, max_tags: int
+        self,
+        image: Path,
+        taxonomy: dict[str, list[str]],
+        retries: int,
+        max_tags: int,
+        *,
+        original_title: str = "",
+        source_url: str = "",
     ) -> MoodtagAnalysis:
-        return self.analyze_envelope(image, taxonomy, retries, max_tags).data
+        return self.analyze_envelope(
+            image,
+            taxonomy,
+            retries,
+            max_tags,
+            original_title=original_title,
+            source_url=source_url,
+        ).data
 
     def analyze_envelope(
-        self, image: Path, taxonomy: dict[str, list[str]], retries: int, max_tags: int
+        self,
+        image: Path,
+        taxonomy: dict[str, list[str]],
+        retries: int,
+        max_tags: int,
+        *,
+        original_title: str = "",
+        source_url: str = "",
     ) -> ResponseEnvelope[MoodtagAnalysis]:
         self.last_attempts = []
         endpoint = self.endpoint()
@@ -273,7 +312,9 @@ class VisionClient:
             self._record_attempt(endpoint, ok=False, error=error)
             raise CoreError("Missing model. Run moodtag config model.")
         try:
-            payload = self.build_payload(image, taxonomy)
+            payload = self.build_payload(
+                image, taxonomy, original_title=original_title, source_url=source_url
+            )
         except CoreError as exc:
             self._record_attempt(endpoint, ok=False, error=exc)
             raise

@@ -38,6 +38,41 @@ class SingleProviderProtocolTests(unittest.TestCase):
         self.assertIs(default_payload["think"], False)
         self.assertIs(smoke_payload["think"], False)
 
+    def test_metadata_context_is_per_image_user_content_for_both_providers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "image.jpg"
+            image.write_bytes(b"jpeg")
+            ollama = OllamaVisionClient(model="vision").build_payload(
+                image,
+                {},
+                original_title="Lookbook",
+                source_url="https://example.test/pin?id=private",
+            )
+            remote = VisionClient(
+                protocol="chat",
+                base_url="https://example.test/v1",
+                model="vision",
+                api_key="key",
+                profile="default",
+            ).build_payload(
+                image,
+                {},
+                original_title="Lookbook",
+                source_url="https://example.test/pin?id=private",
+            )
+        ollama_user = ollama["messages"][1]["content"]
+        remote_user = remote["messages"][1]["content"][0]["text"]
+        for prompt in (ollama_user, remote_user):
+            self.assertIn("Original title: Lookbook", prompt)
+            self.assertIn("https://example.test/pin", prompt)
+            self.assertNotIn("private", prompt)
+
+    def test_suggest_title_is_required_by_both_profile_schemas(self):
+        for profile in ("default", "editorial"):
+            schema = moodtag_json_schema(profile)
+            self.assertIn("suggest_title", schema["required"])
+            self.assertEqual(schema["properties"]["suggest_title"]["type"], "string")
+
     def test_image_destination_labels_local_api_and_remote_service(self):
         local = cli.image_destination_message(
             {"protocol": "ollama", "base_url": "http://127.0.0.1:11434"}
@@ -59,6 +94,7 @@ class SingleProviderProtocolTests(unittest.TestCase):
             "key": "key",
             "camera": "camera",
             "light_color": "light",
+            "suggest_title": "",
             "tags": [],
             "use_intents": [],
         }
@@ -503,6 +539,7 @@ class SingleProviderProtocolTests(unittest.TestCase):
                 "key": "x",
                 "camera": "x",
                 "light_color": "x",
+                "suggest_title": "",
                 "tags": [],
                 "use_intents": [],
             }

@@ -344,6 +344,7 @@ class WorkflowTests(unittest.TestCase):
                     key="red light",
                     camera="close-up",
                     light_color="red",
+                    suggest_title="",
                 )
             ),
             width=1200,
@@ -394,6 +395,7 @@ class WorkflowTests(unittest.TestCase):
                     key="stillness",
                     camera="eye level",
                     light_color="soft light",
+                    suggest_title="",
                 )
             ),
         )

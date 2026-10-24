@@ -21,10 +21,11 @@ def moodtag_json_schema(profile: str = "editorial") -> dict[str, Any]:
         "key": {"type": "string"},
         "camera": {"type": "string"},
         "light_color": {"type": "string"},
+        "suggest_title": {"type": "string"},
         "tags": {"type": "array", "items": {"type": "string"}},
         "use_intents": {"type": "array", "items": {"type": "string"}},
     }
-    required = [*ANNOTATION_FIELDS, "tags", "use_intents"]
+    required = [*ANNOTATION_FIELDS, "suggest_title", "tags", "use_intents"]
     if profile == "editorial":
         properties.update(
             {
