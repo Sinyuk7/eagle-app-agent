@@ -29,7 +29,7 @@ class MoodtagCliTests(unittest.TestCase):
         self.assertNotIn("protocol", saved)
         self.assertNotIn("api_key", saved)
 
-    def test_tag_without_complete_setup_fails_before_eagle(self):
+    def test_guided_tag_without_setup_requests_model_configuration(self):
         stderr = io.StringIO()
         with (
             mock.patch.dict(os.environ, {}, clear=True),
@@ -38,12 +38,12 @@ class MoodtagCliTests(unittest.TestCase):
                 "moodtag.config.config_path",
                 return_value=Path("/tmp/moodtag-no-config.json"),
             ),
-            mock.patch("moodtag.cli.EagleClient") as eagle,
+            mock.patch("moodtag.EagleClient") as eagle,
             redirect_stderr(stderr),
         ):
             self.assertEqual(moodtag.main(["tag", "--board", "board"]), 2)
-        eagle.assert_not_called()
-        self.assertIn("moodtag config model", stderr.getvalue())
+        eagle.assert_called_once()
+        self.assertIn("Board not found", stderr.getvalue())
 
     def test_parser_exposes_current_config_workflows(self):
         parser = moodtag.build_parser()
@@ -252,6 +252,7 @@ class MoodtagCliTests(unittest.TestCase):
             mock.patch("moodtag.EagleClient", return_value=eagle),
             mock.patch("moodtag.cli.sys.stdin.isatty", return_value=True),
             mock.patch("builtins.input", return_value="1"),
+            mock.patch("moodtag.cli.prompt_yes_no", return_value=True),
             mock.patch("moodtag.cli._command_tag_v2", return_value=0),
             redirect_stderr(stderr),
         ):
@@ -310,11 +311,10 @@ class MoodtagCliTests(unittest.TestCase):
         ):
             self.assertEqual(moodtag.main([]), 0)
         output = stderr.getvalue()
-        self.assertIn("Model: Ready", output)
-        self.assertIn("Tagging style: Editorial", output)
+        self.assertIn("Model: gpt-5.6-luna · Remote API", output)
+        self.assertIn("Style: Editorial", output)
         self.assertIn("Settings", output)
-        self.assertIn("1  Tag a board", output)
-        self.assertNotIn("gpt-5.6-luna", output)
+        self.assertIn("1  Tag images", output)
         self.assertNotIn("example.test", output)
 
     def test_tty_home_reports_missing_model_configuration(self):
@@ -330,8 +330,8 @@ class MoodtagCliTests(unittest.TestCase):
         ):
             self.assertEqual(moodtag.main([]), 0)
         output = stderr.getvalue()
-        self.assertIn("Model: ! Needs setup", output)
-        self.assertIn("Tagging style: Editorial", output)
+        self.assertIn("Model: Not configured", output)
+        self.assertIn("Style: Editorial", output)
 
     def test_tty_home_reports_ollama_health_without_api_key(self):
         stderr = io.StringIO()
@@ -354,8 +354,7 @@ class MoodtagCliTests(unittest.TestCase):
             redirect_stderr(stderr),
         ):
             self.assertEqual(moodtag.main([]), 0)
-        self.assertIn("Ollama ready", stderr.getvalue())
-        self.assertIn("Ollama API reachable", stderr.getvalue())
+        self.assertIn("Model: qwen3.5:9b · Ollama", stderr.getvalue())
 
     def test_bare_board_routes_to_guided_tag_and_commands_stay_argparse(self):
         captured = {}

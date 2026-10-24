@@ -104,6 +104,13 @@ SUPPORTED_ORIGINAL_EXTS = {
     ".tif",
     ".tiff",
 }
+EAGLE_SHAPES = (
+    "square",
+    "portrait",
+    "panoramic-portrait",
+    "landscape",
+    "panoramic-landscape",
+)
 
 
 class MoodtagError(CoreError):
@@ -173,6 +180,28 @@ class BoardScope:
 
 
 @dataclass(frozen=True)
+class ScopeInput:
+    folder: str = ""
+    selected: bool = False
+    library: bool = False
+    tags: tuple[str, ...] = ()
+    recursive: bool = True
+    max_items: int = DEFAULT_MAX_BOARD_ITEMS
+    rating: int | None = None
+    shape: str = ""
+
+
+@dataclass(frozen=True)
+class ResolvedScope:
+    source: str
+    items: list[EagleItem]
+
+    @property
+    def total(self) -> int:
+        return len(self.items)
+
+
+@dataclass(frozen=True)
 class EagleItem:
     id: str
     name: str
@@ -184,6 +213,7 @@ class EagleItem:
     height: int | None = None
     size: int | None = None
     palettes: list[dict[str, Any]] = field(default_factory=list)
+    rating: int | None = None
 
 
 @dataclass(frozen=True)
@@ -600,18 +630,41 @@ class EagleClient:
             )
         return boards
 
-    def list_items(self, folder_id: str, *, limit: int = 1000) -> list[EagleItem]:
+    def list_items(
+        self,
+        folder_id: str,
+        *,
+        limit: int = 1000,
+        selected: bool = False,
+        rating: int | None = None,
+        shape: str = "",
+    ) -> list[EagleItem]:
         """Read every page; Eagle may cap a requested limit at 1000."""
+        if rating is not None and not 0 <= rating <= 5:
+            raise MoodtagError("--rating must be between 0 and 5")
+        if shape and shape not in EAGLE_SHAPES:
+            raise MoodtagError(f"Unsupported Eagle Shape: {shape}")
         items: list[EagleItem] = []
         offset = 0
         while True:
             data = http_request(
                 "POST",
                 url_join(self.base_url, "/api/v2/item/get"),
-                json_body={"folders": [folder_id], "limit": limit, "offset": offset},
+                json_body={
+                    **({"folders": [folder_id]} if folder_id else {}),
+                    **({"isSelected": True} if selected else {}),
+                    **({"rating": rating} if rating is not None else {}),
+                    **({"shape": shape} if shape else {}),
+                    "limit": limit,
+                    "offset": offset,
+                },
                 timeout=30,
             )
             if not isinstance(data, dict) or data.get("status") != "success":
+                if selected or rating is not None or shape:
+                    raise MoodtagError(
+                        "Eagle API could not apply the requested scope filter"
+                    )
                 break
             payload = data.get("data") if isinstance(data.get("data"), dict) else {}
             raw_items = payload.get("data", [])
@@ -631,6 +684,8 @@ class EagleClient:
                 raise MoodtagError("Eagle item list pagination stopped before total")
             offset = page_offset + len(page)
 
+        if selected or rating is not None or shape:
+            raise MoodtagError("Eagle API could not return the complete filtered scope")
         # Fallback to the documented v1 list endpoint, which may also paginate.
         offset = 0
         while True:
@@ -723,6 +778,7 @@ def parse_item(raw: dict[str, Any]) -> EagleItem:
             for palette in (raw.get("palettes") or [])
             if isinstance(palette, dict)
         ],
+        rating=(int(raw["star"]) if isinstance(raw.get("star"), int | float) else None),
     )
 
 
@@ -843,13 +899,20 @@ def load_board_scope(
     *,
     recursive: bool = True,
     max_board_items: int = DEFAULT_MAX_BOARD_ITEMS,
+    rating: int | None = None,
+    shape: str = "",
 ) -> BoardScope:
     boards = eagle.boards()
     board = resolve_board(board_query, boards)
     scope_folders: list[BoardScopeFolder] = []
     all_items: list[EagleItem] = []
     for scope_board in board_scope_boards(board, boards, recursive=recursive):
-        folder_items = eagle.list_items(scope_board.id)
+        filters: dict[str, Any] = {}
+        if rating is not None:
+            filters["rating"] = rating
+        if shape:
+            filters["shape"] = shape
+        folder_items = eagle.list_items(scope_board.id, **filters)
         scope_folders.append(
             BoardScopeFolder(board=scope_board, item_count=len(folder_items))
         )
@@ -862,6 +925,73 @@ def load_board_scope(
             "Pass a larger --max-board-items value if this is intentional."
         )
     return BoardScope(board=board, folders=scope_folders, items=items)
+
+
+def resolve_item_scope(eagle: Any, scope_input: ScopeInput) -> ResolvedScope:
+    """Resolve a fixed, metadata-bearing Eagle scope snapshot."""
+    if scope_input.selected:
+        selected_filters: dict[str, Any] = {"selected": True}
+        if scope_input.rating is not None:
+            selected_filters["rating"] = scope_input.rating
+        if scope_input.shape:
+            selected_filters["shape"] = scope_input.shape
+        items = eagle.list_items("", **selected_filters)
+        source = "selected"
+    elif scope_input.library:
+        library_filters: dict[str, Any] = {}
+        if scope_input.rating is not None:
+            library_filters["rating"] = scope_input.rating
+        if scope_input.shape:
+            library_filters["shape"] = scope_input.shape
+        items = eagle.list_items("", **library_filters)
+        source = "Entire library"
+        library_info = getattr(eagle, "library_info", None)
+        if callable(library_info):
+            with contextlib.suppress(Exception):
+                info = library_info()
+                library = info.get("library") if isinstance(info, dict) else None
+                name = (
+                    str(library.get("name") or "").strip()
+                    if isinstance(library, dict)
+                    else ""
+                )
+                if name:
+                    source = name
+    else:
+        if not scope_input.folder:
+            raise MoodtagError("A folder or selected-item scope is required")
+        board_scope = load_board_scope(
+            eagle,
+            scope_input.folder,
+            recursive=scope_input.recursive,
+            max_board_items=scope_input.max_items,
+            rating=scope_input.rating,
+            shape=scope_input.shape,
+        )
+        items = board_scope.items
+        source = board_scope.board.path
+    required = [tag.casefold() for tag in scope_input.tags]
+    if required:
+        items = [
+            item
+            for item in items
+            if all(
+                any(existing.casefold() == tag for existing in item.tags)
+                for tag in required
+            )
+        ]
+    items = sorted(dedupe_items(items), key=lambda item: item.id)
+    if (
+        scope_input.library
+        and scope_input.max_items >= 0
+        and len(items) > scope_input.max_items
+    ):
+        raise MoodtagError(
+            f"Entire library scope has {len(items)} matching items, exceeding "
+            f"--max-board-items {scope_input.max_items}. Add filters or increase "
+            "--max-board-items if this is intentional."
+        )
+    return ResolvedScope(source=source, items=items)
 
 
 def print_scope_summary(scope: BoardScope) -> None:
@@ -1298,10 +1428,34 @@ def ensure_model_setup(args: argparse.Namespace) -> None:
 def validate_board_scope_args(args: argparse.Namespace) -> None:
     if args.max_board_items < -1:
         raise MoodtagError("--max-board-items must be at least -1")
+    if not getattr(args, "board", ""):
+        raise MoodtagError("--board is required for this command")
 
 
 def validate_tag_args(args: argparse.Namespace) -> None:
-    validate_board_scope_args(args)
+    selected = bool(getattr(args, "selected", False))
+    library = bool(getattr(args, "library", False))
+    board = str(getattr(args, "board", "") or "")
+    if selected and (board or library):
+        raise MoodtagError("Use only one scope: --board, --selected, or --library")
+    if library and board:
+        raise MoodtagError("Use only one scope: --board, --selected, or --library")
+    if not selected and not library and not board:
+        if (
+            getattr(args, "tags", [])
+            or getattr(args, "rating", None) is not None
+            or getattr(args, "shape", None)
+        ):
+            args.library = True
+            library = True
+        else:
+            raise MoodtagError("Provide --board, --selected, or --library")
+    if not selected and not library:
+        validate_board_scope_args(args)
+    elif args.max_board_items < -1:
+        raise MoodtagError("--max-board-items must be at least -1")
+    if getattr(args, "rating", None) is not None and not 0 <= args.rating <= 5:
+        raise MoodtagError("--rating must be between 0 and 5")
     try:
         args.profile = resolve_profile(args.profile).id
     except CoreError as exc:
@@ -2532,10 +2686,42 @@ def _command_guided_tag_v2(args: argparse.Namespace) -> int:
         # compatible Eagle implementations do not expose application info;
         # do not make that optional probe block an otherwise valid run.
         pass
-    scope = _load_guided_board_scope(args, eagle, printer)
-    if scope is None:
-        printer.emit("Cancelled. Nothing changed.", state="warning")
-        return 0
+    try:
+        if getattr(args, "selected", False) or getattr(args, "library", False):
+            resolved = resolve_item_scope(
+                eagle,
+                ScopeInput(
+                    folder=args.board,
+                    selected=getattr(args, "selected", False),
+                    library=getattr(args, "library", False),
+                    tags=tuple(getattr(args, "tags", []) or []),
+                    recursive=not args.no_recursive,
+                    max_items=args.max_board_items,
+                    rating=getattr(args, "rating", None),
+                    shape=getattr(args, "shape", "") or "",
+                ),
+            )
+            scope = BoardScope(
+                Board(
+                    "selected" if args.selected else "library",
+                    "Current selection" if args.selected else "Entire library",
+                    "Current selection" if args.selected else resolved.source,
+                ),
+                [],
+                resolved.items,
+            )
+        else:
+            scope = _load_guided_board_scope(args, eagle, printer)
+            if scope is None:
+                printer.emit("Cancelled. Nothing changed.", state="warning")
+                return 3 if getattr(args, "_interactive_home", False) else 0
+    except MoodtagError as exc:
+        if getattr(args, "library", False) and "exceeding --max-board-items" in str(
+            exc
+        ):
+            printer.emit(str(exc), state="warning")
+            return 4 if getattr(args, "_interactive_home", False) else 2
+        raise
     items = scope.items
     completed = sum(has_moodboard_notes(item.annotation) for item in items)
     malformed = sum(analysis_item_status(item) == "malformed" for item in items)
@@ -2545,43 +2731,61 @@ def _command_guided_tag_v2(args: argparse.Namespace) -> int:
         and unsupported_media_reason(item) is None
         for item in items
     )
-    printer.emit(f"Ready to tag \u201c{scope.board.path}\u201d", state="next")
-    printer.emit(
-        f"{len(items)} images total · {completed} already described · {pending} pending"
-    )
+    if not items:
+        printer.emit("No matching images.", state="warning")
+        return 3 if getattr(args, "_interactive_home", False) else 0
+    printer.emit("Scope ready", state="next")
+    scope_label = "Library" if getattr(args, "library", False) else "Scope"
+    printer.emit(f"{scope_label}: {scope.board.path}")
+    filter_parts = []
+    if args.tags:
+        filter_parts.append("Tags: " + ", ".join(args.tags))
+    if getattr(args, "rating", None) is not None:
+        filter_parts.append(f"Rating: {args.rating} (exact)")
+    if getattr(args, "shape", None):
+        filter_parts.append(f"Shape: {args.shape}")
+    if filter_parts:
+        printer.emit("Filters: " + " · ".join(filter_parts))
+    printer.emit(f"{len(items)} images · {completed} analyzed · {pending} pending")
     if unsupported or malformed:
         printer.emit(
             f"{unsupported} unsupported · {malformed} malformed descriptions",
             state="warning",
         )
-    if pending == 0 and malformed == 0:
-        printer.emit("Nothing to process.", state="success")
+    if pending == 0 and malformed == 0 and completed == 0:
+        printer.emit("No supported images to analyze.", state="warning")
         return 0
-    printer.emit_parts(
-        [
-            ("Tagging style: ", "secondary"),
-            (tagging_style_name(args.profile), "primary"),
-        ]
-    )
-    try:
-        selected = choose(
-            printer,
-            "Choose processing strategy",
-            [
-                MenuChoice(
-                    "Only process images without an AI description", primary=True
-                ),
-                MenuChoice("Regenerate AI descriptions and tags"),
-                MenuChoice("Exit"),
-            ],
-            default=0,
-        )
-    except MenuCancelled:
-        printer.emit("Cancelled. Nothing changed.", state="warning")
-        return 0
-    if selected is None or selected == 2:
-        printer.emit("Cancelled. Nothing changed.", state="warning")
-        return 0
+    if pending == len(items) and malformed == 0:
+        selected = 0
+    elif pending == 0 and completed > 0 and malformed == 0:
+        try:
+            selected = choose(
+                printer,
+                "All images are already analyzed",
+                [MenuChoice(f"Regenerate all ({len(items)})", primary=True)],
+                allow_back=True,
+            )
+        except MenuCancelled:
+            return 0
+        if selected is None:
+            return 3 if getattr(args, "_interactive_home", False) else 0
+        selected = 1
+    else:
+        try:
+            selected = choose(
+                printer,
+                "Choose processing strategy",
+                [
+                    MenuChoice(f"Analyze pending images ({pending})", primary=True),
+                    MenuChoice(f"Regenerate all ({len(items)})"),
+                ],
+                allow_back=True,
+            )
+        except MenuCancelled:
+            printer.emit("Cancelled. Nothing changed.", state="warning")
+            return 0
+        if selected is None:
+            return 3 if getattr(args, "_interactive_home", False) else 0
 
     if not getattr(args, "mock_model", False):
         try:
@@ -2589,9 +2793,21 @@ def _command_guided_tag_v2(args: argparse.Namespace) -> int:
         except SetupCancelled:
             printer.emit("Model setup cancelled. Nothing changed.", state="warning")
             return 0
+    model_name = str(getattr(args, "model", "") or "configured model")
+    model_source = str(getattr(args, "source", "") or "model provider")
+    if model_source == "openai-compatible":
+        model_source = "Remote API"
+    count = pending if selected == 0 else len(items)
+    printer.emit(f"Ready to analyze {count} images")
+    printer.emit(f"Model: {model_name} · {model_source}")
+    printer.emit(f"Style: {tagging_style_name(args.profile)}")
+    if not prompt_yes_no("Start?", default=True, printer=printer):
+        printer.emit("Cancelled. Nothing changed.", state="warning")
+        return 0
     args.guided_main_flow = False
     args.write = True
     args.force = selected == 1
+    args._resolved_scope = scope
     return _command_tag_v2(args)
 
 
@@ -2641,10 +2857,7 @@ def _command_tag_v2(args: argparse.Namespace) -> int:
     )
     session = Session(printer)
     try:
-        vision = public_attr("make_vision_client")(args)
-        with session.wait("Connecting to Eagle and model"):
-            if isinstance(vision, OllamaVisionClient):
-                vision.preflight()
+        with session.wait("Connecting to Eagle and resolving scope"):
             eagle = public_attr("EagleClient")(args.eagle_api)
             try:
                 eagle.app_info()
@@ -2652,12 +2865,50 @@ def _command_tag_v2(args: argparse.Namespace) -> int:
                 # Application metadata is advisory; board/item APIs are enough
                 # to run the tagging command and are easier to mock in CI.
                 pass
-            scope = load_board_scope(
-                eagle,
-                args.board,
-                recursive=not args.no_recursive,
-                max_board_items=args.max_board_items,
+            scope = getattr(args, "_resolved_scope", None)
+            if scope is None:
+                resolved = resolve_item_scope(
+                    eagle,
+                    ScopeInput(
+                        folder=args.board,
+                        selected=getattr(args, "selected", False),
+                        library=getattr(args, "library", False),
+                        tags=tuple(getattr(args, "tags", []) or []),
+                        recursive=not args.no_recursive,
+                        max_items=args.max_board_items,
+                        rating=getattr(args, "rating", None),
+                        shape=getattr(args, "shape", "") or "",
+                    ),
+                )
+                title = (
+                    "Current selection"
+                    if args.selected
+                    else "Entire library"
+                    if args.library
+                    else args.board
+                )
+                scope = BoardScope(
+                    board=Board(
+                        id="selected"
+                        if args.selected
+                        else "library"
+                        if args.library
+                        else args.board,
+                        name=title,
+                        path="Current selection" if args.selected else resolved.source,
+                    ),
+                    folders=[],
+                    items=resolved.items,
+                )
+        if not scope.items:
+            return _emit_final_result(
+                printer,
+                args,
+                RunResult(scope.board.path or "selected", 0, 0, 0, 0, 0),
             )
+        vision = public_attr("make_vision_client")(args)
+        if isinstance(vision, OllamaVisionClient):
+            vision.preflight()
     except CoreError as exc:
         raise MoodtagError(str(exc)) from exc
 
@@ -3278,7 +3529,8 @@ def build_parser() -> argparse.ArgumentParser:
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument(
             "--board",
-            required=True,
+            required=False,
+            default="",
             help="Eagle folder URL or ID (name/path also accepted)",
         )
         p.add_argument(
@@ -3309,6 +3561,33 @@ def build_parser() -> argparse.ArgumentParser:
 
     tag = sub.add_parser("tag", help="Analyze pending board items")
     common(tag)
+    tag.add_argument(
+        "--selected",
+        action="store_true",
+        help="Use Eagle's current selected items as a fixed scope snapshot",
+    )
+    tag.add_argument(
+        "--library",
+        action="store_true",
+        help="Use the entire Eagle library as the scope",
+    )
+    tag.add_argument(
+        "--tag",
+        dest="tags",
+        action="append",
+        default=[],
+        help="Require an existing Eagle tag; repeat to require all tags",
+    )
+    tag.add_argument(
+        "--rating",
+        type=int,
+        help="Filter by Eagle rating (0–5; exact match)",
+    )
+    tag.add_argument(
+        "--shape",
+        choices=EAGLE_SHAPES,
+        help="Filter by Eagle-native image shape",
+    )
     tag.add_argument("--write", action="store_true", help="Actually update Eagle")
     tag.add_argument("--force", action="store_true", help="Reprocess existing notes")
     tag.add_argument(
@@ -3475,6 +3754,7 @@ def command_home() -> int:
         and config.get("model")
         and (source == "ollama" or os.environ.get("MOODTAG_API_KEY", "").strip())
     )
+    configured = ready
     ollama_health = ""
     if source == "ollama" and ready:
         try:
@@ -3489,21 +3769,19 @@ def command_home() -> int:
             ollama_health = " · Ollama API unavailable"
     printer.emit("Moodtag", tone="brand")
     printer.emit("")
-    printer.emit_parts(
-        [
-            ("Model: ", "secondary"),
-            (
-                ("Ollama ready" if source == "ollama" else "Ready") + ollama_health,
-                "success",
-            )
-            if ready
-            else ("! Needs setup" + ollama_health, "warning"),
-        ]
-    )
+    if configured:
+        provider = "Ollama" if source == "ollama" else str(source or "Remote API")
+        if provider == "openai-compatible":
+            provider = "Remote API"
+        printer.emit(f"Model: {config.get('model', 'configured model')} · {provider}")
+        if ollama_health.endswith("unavailable"):
+            printer.emit("Ollama API unavailable", state="warning")
+    else:
+        printer.emit("Model: Not configured", state="warning")
     current_style = config.get("profile", DEFAULT_PROFILE) or DEFAULT_PROFILE
     printer.emit_parts(
         [
-            ("Tagging style: ", "secondary"),
+            ("Style: ", "secondary"),
             (tagging_style_name(current_style), "primary"),
         ]
     )
@@ -3513,26 +3791,167 @@ def command_home() -> int:
             printer,
             "Choose an action",
             [
-                MenuChoice("Tag a board", primary=True),
-                MenuChoice("Change tagging style", section="Settings"),
-                MenuChoice("Model setup"),
+                MenuChoice("Tag images", primary=True),
+                MenuChoice("Change style", section="Settings"),
+                MenuChoice("Change model"),
             ],
         )
     except MenuCancelled:
         return 0
     if selected == 0:
-        printer.emit("Paste an Eagle board URL, ID, name, or path", state="next")
-        try:
-            printer.emit(">", tone="accent")
-            board = input().strip()
-        except (EOFError, KeyboardInterrupt):
-            return 0
-        return main([board]) if board else 0
+        return command_guided_scope_flow(printer)
     if selected == 1:
         command_config_profile(argparse.Namespace(profile=""))
     else:
         command_config_model(argparse.Namespace())
     return command_home()
+
+
+def command_guided_scope_flow(printer: Printer) -> int:
+    """Collect scope-specific input while keeping Folder/Selection flows short."""
+    while True:
+        try:
+            choice = choose(
+                printer,
+                "Select image source",
+                ["Eagle folder", "Current selection", "Entire library"],
+                allow_back=True,
+            )
+        except MenuCancelled:
+            return 0
+        if choice is None:
+            return command_home()
+
+        args = build_parser().parse_args(["tag"])
+        args._interactive_home = True
+        args.write = True
+        if choice == 0:
+            printer.emit(
+                "Folder URL, ID, name, or path · b back · q quit", state="next"
+            )
+            try:
+                printer.emit(">", tone="accent")
+                folder = input().strip()
+            except (EOFError, KeyboardInterrupt):
+                return 0
+            if folder.lower() == "q":
+                return 0
+            if folder.lower() == "b" or not folder:
+                continue
+            args.board = folder
+        elif choice == 1:
+            args.selected = True
+        else:
+            args.library = True
+            try:
+                filters = choose_filters(printer)
+            except MenuCancelled:
+                return 0
+            if filters is None:
+                continue
+            args.tags, args.rating, args.shape = filters
+
+        try:
+            result = _command_guided_tag_v2(args)
+        except MoodtagError as exc:
+            printer.emit(str(exc), state="warning")
+            return 2
+        if result in {3, 4}:
+            if result == 4:
+                printer.emit(
+                    "Add a filter to narrow the library scope.", state="warning"
+                )
+            continue
+        return result
+
+
+def choose_filters(
+    printer: Printer,
+) -> tuple[list[str], int | None, str] | None:
+    """Ask for only the selected entire-library filter conditions."""
+    while True:
+        printer.emit("Entire library", state="next")
+        printer.emit("Filters (optional)")
+        printer.emit("1  Tags")
+        printer.emit("2  Rating")
+        printer.emit("3  Shape")
+        printer.emit("Enter to skip · e.g. 1,2")
+        try:
+            printer.emit(">", tone="accent")
+            answer = input().strip().lower()
+        except (EOFError, KeyboardInterrupt) as exc:
+            raise MenuCancelled from exc
+        if answer == "q":
+            raise MenuCancelled
+        if answer == "b":
+            return None
+        if not answer:
+            selected: set[int] = set()
+            break
+        try:
+            selected = {int(value.strip()) for value in answer.split(",")}
+        except ValueError:
+            selected = set()
+        if selected and selected <= {1, 2, 3}:
+            break
+        printer.emit(
+            "Choose 1, 2, 3, or a comma-separated combination.", state="warning"
+        )
+
+    tags: list[str] = []
+    rating: int | None = None
+    shape = ""
+    if 1 in selected:
+        value = ask_scope_value(printer, "Tags (comma-separated; all must match)")
+        if value is None:
+            return None
+        if value == "\x00":
+            return choose_filters(printer)
+        tags = [tag.strip() for tag in value.split(",") if tag.strip()]
+        if not tags:
+            printer.emit("Enter at least one tag.", state="warning")
+            return choose_filters(printer)
+    if 2 in selected:
+        while True:
+            value = ask_scope_value(printer, "Rating (0–5, exact match)")
+            if value is None:
+                return None
+            if value == "\x00":
+                return choose_filters(printer)
+            try:
+                rating = int(value)
+            except ValueError:
+                rating = -1
+            if 0 <= rating <= 5:
+                break
+            printer.emit("Enter a rating from 0 to 5.", state="warning")
+    if 3 in selected:
+        choices = ", ".join(EAGLE_SHAPES)
+        while True:
+            value = ask_scope_value(printer, f"Shape ({choices})")
+            if value is None:
+                return None
+            if value == "\x00":
+                return choose_filters(printer)
+            if value in EAGLE_SHAPES:
+                shape = value
+                break
+            printer.emit("Enter one of the listed Eagle shapes.", state="warning")
+    return tags, rating, shape
+
+
+def ask_scope_value(printer: Printer, label: str) -> str | None:
+    printer.emit(f"{label} · b back · q quit", state="next")
+    try:
+        printer.emit(">", tone="accent")
+        value = input().strip()
+    except (EOFError, KeyboardInterrupt) as exc:
+        raise MenuCancelled from exc
+    if value.lower() == "q":
+        raise MenuCancelled
+    if value.lower() == "b":
+        return "\x00"
+    return value
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -3553,6 +3972,8 @@ def main(argv: list[str] | None = None) -> int:
         if argv and argv[0] == "help":
             build_parser().print_help()
             return 0
+        if argv and argv[0] == "selected":
+            argv = ["tag", "--selected", *argv[1:]]
         argv, _guided = rewrite_main_argv(argv)
         parser = build_parser()
         args = parser.parse_args(argv)

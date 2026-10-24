@@ -64,6 +64,13 @@ Eagle API Adapter 负责 V2 字段和 CLI 语义之间的映射，例如 Item �
 - [范围查询返回重复或不稳定顺序] → 按 Item ID 去重并使用稳定排序后再展示和处理。
 - [范围为空触发无关模型设置] → 空范围直接结束，不初始化模型或调用 AI。
 
+## Eagle API Capability Findings
+
+- Eagle Web API V2 `/api/v2/item/get` accepts POST JSON filters `rating` (integer 0–5) and `shape` (`square`, `portrait`, `panoramic-portrait`, `landscape`, `panoramic-landscape`). `rating` is the query key; returned Item metadata uses `star`.
+- Local read-only verification against Eagle 4.0.0 Build 20260401 returned exact matching star values for `rating=1` (225 items) and `rating=2` (4 items). `star=4` left the unfiltered total unchanged, confirming it is not the query key.
+- The local `shape=portrait` result contained 13,224 items; its first 1,000 returned items all had portrait dimensions. Eagle owns Shape classification and its numeric thresholds remain undisclosed.
+- Unknown/invalid Shape values may return an empty successful response, so CLI enum validation is required. Rating and Shape are passed to Eagle V2 as native filters; Moodtag does not infer or silently drop them.
+
 ## Migration Plan
 
 1. 先实现统一标签候选校验和重复合法标签修正，并补充核心回归测试。

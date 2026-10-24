@@ -59,6 +59,41 @@ class CommercialEditorialTests(unittest.TestCase):
         self.assertNotIn("VisibleText:", annotation)
         self.assertNotIn("CommercialFormatConfidence:", annotation)
 
+    def test_generated_tags_share_profile_validation_and_final_limit(self):
+        taxonomy = {"only": ["photo", "fashion", "lighting ref"]}
+        payload = {
+            **legacy_payload(),
+            "tags": ["PHOTO", "fashion", "unknown"],
+            "use_intents": ["lighting_reference", "color_reference", "invalid"],
+        }
+        analysis = normalize_analysis_json(payload, taxonomy=taxonomy, max_tags=2)
+        self.assertEqual(analysis.tags, ["photo", "fashion"])
+        self.assertEqual(analysis.tag_groups, {"only": ["photo", "fashion"]})
+        self.assertEqual(
+            analysis.use_intents, ["lighting_reference", "color_reference"]
+        )
+        self.assertEqual(analysis.rejected_tags, ["unknown", "color ref"])
+        self.assertEqual(analysis.rejected_use_intents, ["invalid"])
+
+    def test_derived_tags_outside_profile_are_not_generated(self):
+        analysis = normalize_analysis_json(
+            {**legacy_payload(), "use_intents": ["color_reference"]},
+            taxonomy={"only": ["photo"]},
+            max_tags=15,
+        )
+        self.assertEqual(analysis.tags, ["photo"])
+        self.assertEqual(analysis.use_intents, ["color_reference"])
+        self.assertEqual(analysis.rejected_tags, ["color ref"])
+
+    def test_case_variant_valid_duplicate_is_not_rejected(self):
+        analysis = normalize_analysis_json(
+            {**legacy_payload(), "tags": ["photo", "PHOTO"]},
+            taxonomy={"only": ["photo"]},
+            max_tags=15,
+        )
+        self.assertEqual(analysis.tags, ["photo"])
+        self.assertEqual(analysis.rejected_tags, [])
+
     def test_commercial_fields_normalize_group_and_round_trip_through_annotation(self):
         payload = {
             **legacy_payload(),

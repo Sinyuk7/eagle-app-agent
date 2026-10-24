@@ -50,3 +50,29 @@ Moodtag SHALL finish cleanly when filters produce no items and SHALL avoid model
 #### Scenario: Filters match nothing
 - **WHEN** the resolved scope is empty after all filters are applied
 - **THEN** Moodtag SHALL report zero candidates and exit without initializing a provider
+
+### Requirement: Resolve the entire Eagle library as a scope
+Moodtag SHALL support the entire Eagle library as an explicit scope. Advanced CLI filter options MAY imply this scope when no Folder or selection is provided. The library query SHALL be fully paginated and SHALL enforce the configured item limit without silently truncating results.
+
+#### Scenario: Filter-only CLI uses the library
+- **WHEN** a user supplies `--tag`, `--rating`, or `--shape` without a Folder or selection
+- **THEN** Moodtag SHALL apply those Eagle metadata filters to the entire library
+
+#### Scenario: Unfiltered library exceeds the configured limit
+- **WHEN** the resolved entire-library scope exceeds `--max-board-items`
+- **THEN** Moodtag SHALL stop with guidance to narrow the scope or raise the limit, without analyzing a truncated subset
+
+### Requirement: Keep interactive filters specific to the entire library
+The guided CLI SHALL offer Folder, Current selection, and Entire library scopes. It SHALL ask for optional Tag, Rating, and Shape filters only for Entire library. Repeated tags and multiple filter types SHALL use intersection semantics.
+
+#### Scenario: Folder or selection scope
+- **WHEN** a user chooses Eagle folder or Current selection in the guided CLI
+- **THEN** Moodtag SHALL resolve and summarize that scope without showing filter prompts
+
+#### Scenario: Entire-library scope
+- **WHEN** a user chooses Entire library
+- **THEN** Moodtag SHALL offer a single optional filter-selection step and ask values only for selected conditions
+
+#### Scenario: No matching library items
+- **WHEN** selected filters resolve to no items
+- **THEN** Moodtag SHALL report no matching images, return to scope selection, and avoid model setup

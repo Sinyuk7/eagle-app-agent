@@ -137,15 +137,15 @@ def normalize_analysis_json(
     if not isinstance(raw_use_intents, list):
         raise CoreError("Model result field use_intents must be an array")
 
-    tags, rejected_tags = reconcile_tags(
-        [str(value).strip() for value in raw_tags if str(value).strip()],
-        taxonomy,
-        max_tags=max_tags,
-    )
+    direct_tags = [str(value).strip() for value in raw_tags if str(value).strip()]
     intent_tags, use_intents, rejected_use_intents = reconcile_use_intents(
         [str(value).strip() for value in raw_use_intents if str(value).strip()]
     )
-    tags = merge_unique(tags, intent_tags)[:max_tags]
+    # Validate the complete generated candidate set against this profile. This
+    # keeps derived tags subject to the same taxonomy and count as direct tags.
+    tags, rejected_tags = reconcile_tags(
+        merge_unique(direct_tags, intent_tags), taxonomy, max_tags=max_tags
+    )
 
     return MoodtagAnalysis(
         brief=fields["brief"],

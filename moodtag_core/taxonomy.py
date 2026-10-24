@@ -106,6 +106,9 @@ def reconcile_tags(
         if canonical and canonical.lower() not in seen:
             resolved.append(canonical)
             seen.add(canonical.lower())
+        elif canonical:
+            # A valid canonical tag already accepted above is a duplicate.
+            continue
         elif tag and tag.lower() not in {value.lower() for value in rejected}:
             rejected.append(tag)
     return resolved[:max_tags], rejected

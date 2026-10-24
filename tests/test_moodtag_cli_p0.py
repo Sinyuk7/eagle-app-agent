@@ -173,7 +173,7 @@ class MoodtagCliP0Tests(unittest.TestCase):
                 self.assertEqual(moodtag.main(["MSHGWFME8L6SJ"]), 0)
 
         self.assertEqual(stdout.getvalue(), "")
-        self.assertIn("Nothing to process.", stderr.getvalue())
+        self.assertIn("No matching images.", stderr.getvalue())
         self.assertNotIn("test-key", stderr.getvalue())
 
 

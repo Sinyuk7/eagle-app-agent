@@ -19,10 +19,16 @@ import moodtag
 from moodtag.cli import (
     Board,
     BoardScope,
+    EagleClient,
     EagleItem,
+    MoodtagError,
     RunResult,
+    ScopeInput,
     TagItemResult,
+    choose_filters,
+    resolve_item_scope,
     run_tag_analysis,
+    unsupported_media_reason,
 )
 from moodtag.ui.menu import MenuCancelled, MenuChoice, choose
 from moodtag.ui.printer import Printer
@@ -59,6 +65,220 @@ class WorkflowTests(unittest.TestCase):
         return moodtag.build_parser().parse_args(
             ["tag", "--board", "board", "--plain", *options]
         )
+
+    def test_selected_scope_has_a_direct_cli_entry(self):
+        seen = []
+        with mock.patch(
+            "moodtag.cli.command_tag", side_effect=lambda args: seen.append(args) or 0
+        ):
+            self.assertEqual(moodtag.main(["selected", "--write"]), 0)
+        self.assertTrue(seen[0].selected)
+        self.assertTrue(seen[0].write)
+
+    def test_selected_scope_is_a_fixed_snapshot_and_tag_filters_intersect(self):
+        selected = [
+            EagleItem("b", "b.jpg", "jpg", ["CELINE", "editorial"], [], ""),
+            EagleItem("a", "a.jpg", "jpg", ["CELINE"], [], ""),
+        ]
+        eagle = mock.Mock()
+        eagle.list_items.return_value = selected
+        eagle.list_items.return_value.append(selected[0])
+        resolved = resolve_item_scope(
+            eagle,
+            ScopeInput(selected=True, tags=("CELINE", "editorial")),
+        )
+        self.assertEqual([entry.id for entry in resolved.items], ["b"])
+        self.assertEqual(eagle.list_items.call_count, 1)
+        self.assertEqual(eagle.list_items.call_args.kwargs, {"selected": True})
+
+    def test_selected_scope_reports_unsupported_eagle_filter(self):
+        with mock.patch("moodtag.cli.http_request", return_value={"status": "error"}):
+            with self.assertRaisesRegex(MoodtagError, "could not apply the requested"):
+                EagleClient().list_items("", selected=True)
+
+    def test_scope_tag_filter_intersects_and_accepts_manual_non_taxonomy_tag(self):
+        eagle = mock.Mock()
+        eagle.boards.return_value = [Board("folder", "Folder", "Folder")]
+        eagle.list_items.return_value = [
+            EagleItem("1", "one.jpg", "jpg", ["CELINE", "editorial"], [], ""),
+            EagleItem("2", "two.jpg", "jpg", ["CELINE"], [], ""),
+        ]
+        with mock.patch("moodtag.cli.load_board_scope") as load_scope:
+            load_scope.return_value = BoardScope(
+                Board("folder", "Folder", "Folder"), [], eagle.list_items.return_value
+            )
+            result = resolve_item_scope(
+                eagle, ScopeInput(folder="folder", tags=("CELINE", "editorial"))
+            )
+        self.assertEqual([entry.id for entry in result.items], ["1"])
+
+    def test_unsupported_media_remains_in_snapshot_for_existing_skip_policy(self):
+        candidate = EagleItem("1", "movie.mov", "mov", [], [], "")
+        self.assertTrue(unsupported_media_reason(candidate))
+
+    def test_v2_item_query_reads_all_pages_past_one_thousand(self):
+        calls: list[int] = []
+
+        def request(_method, _url, *, json_body, **_kwargs):
+            offset = json_body["offset"]
+            calls.append(offset)
+            count = min(1000, 1001 - offset)
+            rows = [
+                {"id": str(index), "name": f"item-{index}.jpg", "ext": "jpg"}
+                for index in range(offset, offset + count)
+            ]
+            return {
+                "status": "success",
+                "data": {
+                    "data": rows,
+                    "total": 1001,
+                    "limit": 1000,
+                    "offset": offset,
+                },
+            }
+
+        with mock.patch("moodtag.cli.http_request", side_effect=request):
+            items = EagleClient().list_items("folder")
+        self.assertEqual(len(items), 1001)
+        self.assertEqual(calls, [0, 1000])
+
+    def test_rating_and_shape_use_native_v2_fields_and_map_star_metadata(self):
+        requests = []
+
+        def request(_method, _url, *, json_body, **_kwargs):
+            requests.append(json_body)
+            return {
+                "status": "success",
+                "data": {
+                    "data": [{"id": "1", "star": 4, "width": 600, "height": 900}],
+                    "total": 1,
+                    "limit": 1000,
+                    "offset": 0,
+                },
+            }
+
+        with mock.patch("moodtag.cli.http_request", side_effect=request):
+            items = EagleClient().list_items("folder", rating=4, shape="portrait")
+        self.assertEqual(requests[0]["rating"], 4)
+        self.assertEqual(requests[0]["shape"], "portrait")
+        self.assertEqual(items[0].rating, 4)
+
+    def test_rating_scope_validation_rejects_out_of_range_values(self):
+        with self.assertRaisesRegex(MoodtagError, "between 0 and 5"):
+            EagleClient().list_items("folder", rating=99)
+
+    def test_entire_library_filters_ask_only_for_selected_conditions(self):
+        printer = Printer(stream=io.StringIO(), plain=True)
+        answers = iter(["1,2,3", "CELINE, editorial", "4", "panoramic-portrait"])
+        with mock.patch("builtins.input", side_effect=lambda: next(answers)):
+            self.assertEqual(
+                choose_filters(printer),
+                (["CELINE", "editorial"], 4, "panoramic-portrait"),
+            )
+        self.assertIn("Enter to skip · e.g. 1,2", printer.stream.getvalue())
+
+    def test_empty_filter_selection_skips_all_filter_prompts(self):
+        printer = Printer(stream=io.StringIO(), plain=True)
+        with mock.patch("builtins.input", return_value="") as input_mock:
+            self.assertEqual(choose_filters(printer), ([], None, ""))
+        input_mock.assert_called_once()
+
+    def test_filter_only_cli_infers_entire_library_scope(self):
+        args = self.tag_args("--tag", "CELINE", "--rating", "4")
+        args.board = ""
+        moodtag.cli.validate_tag_args(args)
+        self.assertTrue(args.library)
+
+    def test_empty_resolved_scope_does_not_construct_model(self):
+        args = self.tag_args("--json")
+        eagle = Eagle()
+        scope = BoardScope(Board("board", "Board", "Board"), [], [])
+        with (
+            mock.patch("moodtag.cli.public_attr", return_value=lambda _api: eagle),
+            mock.patch("moodtag.cli.load_board_scope", return_value=scope),
+            mock.patch("moodtag.cli.make_vision_client") as make_vision,
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(moodtag.cli._command_tag_v2(args), 0)
+        make_vision.assert_not_called()
+
+    def test_guided_selection_passes_the_resolved_snapshot_to_analysis(self):
+        selected = item(1)
+        eagle = Eagle()
+        eagle.list_items = mock.Mock(return_value=[selected])
+        args = moodtag.build_parser().parse_args(["tag", "--selected", "--mock-model"])
+        args._interactive_home = True
+        observed = []
+        with (
+            mock.patch("moodtag.cli.public_attr", return_value=lambda _api: eagle),
+            mock.patch("moodtag.cli.prompt_yes_no", return_value=True),
+            mock.patch(
+                "moodtag.cli._command_tag_v2",
+                side_effect=lambda forwarded: observed.append(forwarded._resolved_scope)
+                or 0,
+            ),
+            redirect_stderr(io.StringIO()),
+        ):
+            self.assertEqual(moodtag.cli._command_guided_tag_v2(args), 0)
+        self.assertEqual(eagle.list_items.call_count, 1)
+        self.assertEqual(observed[0].items, [selected])
+
+    def test_guided_empty_scope_returns_to_scope_selection_without_model(self):
+        eagle = Eagle()
+        eagle.list_items = mock.Mock(return_value=[])
+        args = moodtag.build_parser().parse_args(["tag", "--selected"])
+        args._interactive_home = True
+        with (
+            mock.patch("moodtag.cli.public_attr", return_value=lambda _api: eagle),
+            mock.patch("moodtag.cli.make_vision_client") as make_vision,
+            redirect_stderr(io.StringIO()),
+        ):
+            self.assertEqual(moodtag.cli._command_guided_tag_v2(args), 3)
+        make_vision.assert_not_called()
+
+    def test_scope_menu_current_selection_does_not_ask_for_filters(self):
+        seen = []
+        with (
+            mock.patch("moodtag.cli.choose", return_value=1),
+            mock.patch(
+                "moodtag.cli._command_guided_tag_v2",
+                side_effect=lambda args: seen.append(args) or 0,
+            ),
+        ):
+            self.assertEqual(
+                moodtag.cli.command_guided_scope_flow(
+                    Printer(stream=io.StringIO(), plain=True)
+                ),
+                0,
+            )
+        self.assertTrue(seen[0].selected)
+        self.assertFalse(seen[0].library)
+
+    def test_scope_menu_folder_does_not_ask_for_filters(self):
+        seen = []
+        with (
+            mock.patch("moodtag.cli.choose", return_value=0),
+            mock.patch("builtins.input", return_value="folder-id"),
+            mock.patch(
+                "moodtag.cli._command_guided_tag_v2",
+                side_effect=lambda args: seen.append(args) or 0,
+            ),
+        ):
+            self.assertEqual(
+                moodtag.cli.command_guided_scope_flow(
+                    Printer(stream=io.StringIO(), plain=True)
+                ),
+                0,
+            )
+        self.assertEqual(seen[0].board, "folder-id")
+        self.assertFalse(seen[0].library)
+        self.assertEqual(seen[0].tags, [])
+
+    def test_entire_library_scope_fails_closed_when_over_limit(self):
+        eagle = mock.Mock()
+        eagle.list_items.return_value = [item(1), item(2)]
+        with self.assertRaisesRegex(MoodtagError, "Add filters"):
+            resolve_item_scope(eagle, ScopeInput(library=True, max_items=1))
 
     def test_export_context_writes_expected_markdown(self):
         complete = EagleItem(
@@ -264,7 +484,7 @@ class WorkflowTests(unittest.TestCase):
                 self.assertEqual(
                     moodtag.cli._command_tag_v2(self.tag_args("--json")), 0
                 )
-            self.assertEqual(events, ["launch", "eagle", "analyze"])
+            self.assertEqual(events, ["eagle", "launch", "analyze"])
             self.assertEqual(client.runtime["version"], "test-ollama")
             self.assertIn('"changed": 1', stdout.getvalue())
         finally:
