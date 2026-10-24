@@ -6,11 +6,13 @@ import json
 import os
 import socket
 import sys
+import tempfile
 import time
 import types
 import unittest
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from unittest import mock
 
 import moodtag
@@ -26,6 +28,8 @@ from moodtag.ui.menu import MenuCancelled, MenuChoice, choose
 from moodtag.ui.printer import Printer
 from moodtag.ui.progress import Progress, _cell_width, _fit_title
 from moodtag.ui.session import Session
+from moodtag_core.annotation import build_annotation_block
+from moodtag_core.contract import MoodtagAnalysis
 from moodtag_core.provider import OllamaVisionClient
 
 
@@ -55,6 +59,92 @@ class WorkflowTests(unittest.TestCase):
         return moodtag.build_parser().parse_args(
             ["tag", "--board", "board", "--plain", *options]
         )
+
+    def test_export_context_writes_expected_markdown(self):
+        complete = EagleItem(
+            "1",
+            "portrait.jpg",
+            "jpg",
+            ["portrait", "editorial"],
+            [],
+            build_annotation_block(
+                MoodtagAnalysis(
+                    brief="A red portrait",
+                    elements=["person"],
+                    use="editorial",
+                    key="red light",
+                    camera="close-up",
+                    light_color="red",
+                )
+            ),
+            width=1200,
+            height=1600,
+            size=2048,
+            palettes=[{"color": [255, 0, 0], "ratio": 25}],
+        )
+        pending = EagleItem("2", "pending.jpg", "jpg", [], [], "")
+        scope = BoardScope(
+            Board("board", "Board", "Studio/Board"), [], [complete, pending]
+        )
+        eagle = Eagle()
+        eagle.library_info = lambda: {}
+        stdout = io.StringIO()
+
+        with (
+            mock.patch("moodtag.cli.public_attr", return_value=lambda _api: eagle),
+            mock.patch("moodtag.cli.load_board_scope", return_value=scope),
+            redirect_stdout(stdout),
+        ):
+            args = moodtag.build_parser().parse_args(
+                ["export-context", "--board", "board"]
+            )
+            self.assertEqual(moodtag.cli.command_export_context(args), 0)
+
+        markdown = stdout.getvalue()
+        self.assertIn("# Moodboard Context: Studio/Board", markdown)
+        self.assertIn("Items: 2", markdown)
+        self.assertIn("Exported: 1", markdown)
+        self.assertIn("Pending skipped: 1", markdown)
+        self.assertIn("A red portrait.jpg", markdown)
+        self.assertIn("Tags: portrait | editorial", markdown)
+        self.assertIn("Palette: #ff0000 25%", markdown)
+        self.assertNotIn("pending.jpg", markdown)
+
+    def test_export_context_output_option_writes_markdown_file(self):
+        complete = EagleItem(
+            "1",
+            "portrait.jpg",
+            "jpg",
+            [],
+            [],
+            build_annotation_block(
+                MoodtagAnalysis(
+                    brief="A quiet portrait",
+                    elements=["person"],
+                    use="editorial",
+                    key="stillness",
+                    camera="eye level",
+                    light_color="soft light",
+                )
+            ),
+        )
+        scope = BoardScope(Board("board", "Board", "Board"), [], [complete])
+        eagle = Eagle()
+        eagle.library_info = lambda: {}
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch("moodtag.cli.public_attr", return_value=lambda _api: eagle),
+            mock.patch("moodtag.cli.load_board_scope", return_value=scope),
+        ):
+            output_path = Path(tmp) / "context.md"
+            args = moodtag.build_parser().parse_args(
+                ["export-context", "--board", "board", "--output", str(output_path)]
+            )
+            self.assertEqual(moodtag.cli.command_export_context(args), 0)
+            self.assertTrue(output_path.exists())
+            self.assertIn("# Moodboard Context: Board", output_path.read_text())
+            self.assertIn("A quiet portrait.jpg", output_path.read_text())
 
     def test_concurrent_analysis_yields_completion_order(self):
         def analyze(*, index, item, **_kwargs):
