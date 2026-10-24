@@ -34,6 +34,10 @@ class MoodtagCliTests(unittest.TestCase):
         with (
             mock.patch.dict(os.environ, {}, clear=True),
             mock.patch("moodtag.cli.load_env_defaults"),
+            mock.patch(
+                "moodtag.config.config_path",
+                return_value=Path("/tmp/moodtag-no-config.json"),
+            ),
             mock.patch("moodtag.cli.EagleClient") as eagle,
             redirect_stderr(stderr),
         ):
@@ -140,7 +144,7 @@ class MoodtagCliTests(unittest.TestCase):
                     os.environ, {"MOODTAG_CONFIG": str(config)}, clear=True
                 ),
                 mock.patch("moodtag.cli.sys.stdin.isatty", return_value=True),
-                mock.patch("moodtag.cli.choose", side_effect=[2, 0]),
+                mock.patch("moodtag.cli.choose", side_effect=[0, 1, 0]),
                 mock.patch("builtins.input", side_effect=["https://new.test/v1"]),
                 mock.patch("moodtag.cli.getpass.getpass", return_value=""),
                 mock.patch("moodtag.cli.prompt_yes_no", return_value=True),
@@ -248,7 +252,7 @@ class MoodtagCliTests(unittest.TestCase):
             mock.patch("moodtag.EagleClient", return_value=eagle),
             mock.patch("moodtag.cli.sys.stdin.isatty", return_value=True),
             mock.patch("builtins.input", return_value="1"),
-            mock.patch("moodtag.cli.prompt_yes_no", return_value=False),
+            mock.patch("moodtag.cli._command_tag_v2", return_value=0),
             redirect_stderr(stderr),
         ):
             self.assertEqual(moodtag.main(["Shared", "--mock-model", "--plain"]), 0)

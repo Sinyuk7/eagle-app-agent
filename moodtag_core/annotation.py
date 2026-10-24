@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Literal
 
 from .contract import ANNOTATION_FIELDS, ANNOTATION_LABELS, MoodtagAnalysis
 
@@ -14,6 +15,9 @@ COMMERCIAL_ANNOTATION_LABEL_ORDER = [
     ANNOTATION_LABELS["commercial_format_confidence"],
 ]
 ALL_ANNOTATION_LABELS = ANNOTATION_LABEL_ORDER + COMMERCIAL_ANNOTATION_LABEL_ORDER
+MOODTAG_START_MARKER = "<!-- moodtag:analysis:start -->"
+MOODTAG_END_MARKER = "<!-- moodtag:analysis:end -->"
+AnalysisStatus = Literal["missing", "valid", "malformed"]
 
 
 def build_annotation_block(analysis: MoodtagAnalysis) -> str:
@@ -45,16 +49,62 @@ def build_annotation_block(analysis: MoodtagAnalysis) -> str:
         if value:
             lines.append(f"{label}: {value}")
             lines.append("")
-    return "\n".join(lines).strip()
+    body = "\n".join(lines).strip()
+    return f"{MOODTAG_START_MARKER}\n{body}\n{MOODTAG_END_MARKER}"
+
+
+def analysis_status(annotation: str) -> AnalysisStatus:
+    """Classify Moodtag output without treating arbitrary user notes as output."""
+    text = annotation or ""
+    start_count = text.count(MOODTAG_START_MARKER)
+    end_count = text.count(MOODTAG_END_MARKER)
+    if start_count or end_count:
+        if start_count != 1 or end_count != 1:
+            return "malformed"
+        start = text.find(MOODTAG_START_MARKER)
+        end = text.find(MOODTAG_END_MARKER)
+        if end <= start:
+            return "malformed"
+        block = text[start + len(MOODTAG_START_MARKER) : end]
+        return "valid" if _valid_analysis_fields(block) else "malformed"
+    if not text.strip():
+        return "missing"
+    # Legacy output can be recognized only when every required field occurs once.
+    matches = [match.group(1) for match in label_matches(text)]
+    required = set(ANNOTATION_LABEL_ORDER)
+    if not required.intersection(matches):
+        return "missing"
+    if _valid_analysis_fields(text) and _legacy_block_is_ordered(text):
+        return "valid"
+    return "malformed"
+
+
+def _valid_analysis_fields(text: str) -> bool:
+    matches = [match.group(1) for match in label_matches(text)]
+    required = set(ANNOTATION_LABEL_ORDER)
+    if not required.issubset(matches) or not all(
+        matches.count(label) == 1 for label in required
+    ):
+        return False
+    fields = parse_annotation_fields(text)
+    return all(fields.get(label, "").strip() for label in ANNOTATION_LABEL_ORDER)
+
+
+def _legacy_block_is_ordered(text: str) -> bool:
+    labels = [match.group(1) for match in label_matches(text)]
+    required = [label for label in ANNOTATION_LABEL_ORDER if label in labels]
+    return required == ANNOTATION_LABEL_ORDER and find_analysis_span(text) is not None
 
 
 def has_analysis_annotation(annotation: str) -> bool:
-    fields = parse_annotation_fields(annotation)
-    return all(fields.get(label) for label in ANNOTATION_LABEL_ORDER)
+    return analysis_status(annotation) == "valid"
 
 
 def replace_analysis_annotation(existing: str, block: str) -> str:
     existing = existing or ""
+    status = analysis_status(existing)
+    if status == "malformed":
+        raise ValueError("Cannot safely replace malformed Moodtag annotation")
     span = find_analysis_span(existing)
     if span:
         start, end = span
@@ -71,6 +121,8 @@ def replace_analysis_annotation(existing: str, block: str) -> str:
 
 
 def remove_analysis_annotation(existing: str) -> str:
+    if analysis_status(existing) == "malformed":
+        raise ValueError("Cannot safely remove malformed Moodtag annotation")
     span = find_analysis_span(existing or "")
     if not span:
         return (existing or "").strip()
@@ -99,6 +151,9 @@ def parse_annotation_fields(annotation: str) -> dict[str, str]:
             if next_match.group(1) in labels:
                 value_end = next_match.start()
                 break
+        marker_end = text.find(MOODTAG_END_MARKER, value_start)
+        if marker_end >= 0:
+            value_end = min(value_end, marker_end)
         value = text[value_start:value_end].strip()
         if value:
             result[label] = collapse_blank_lines(value)
@@ -107,6 +162,18 @@ def parse_annotation_fields(annotation: str) -> dict[str, str]:
 
 def find_analysis_span(annotation: str) -> tuple[int, int] | None:
     text = annotation or ""
+    start_marker = text.find(MOODTAG_START_MARKER)
+    end_marker = text.find(MOODTAG_END_MARKER)
+    if start_marker >= 0 or end_marker >= 0:
+        if (
+            start_marker < 0
+            or end_marker < 0
+            or end_marker <= start_marker
+            or text.count(MOODTAG_START_MARKER) != 1
+            or text.count(MOODTAG_END_MARKER) != 1
+        ):
+            return None
+        return start_marker, end_marker + len(MOODTAG_END_MARKER)
     matches = [
         match
         for match in label_matches(text)

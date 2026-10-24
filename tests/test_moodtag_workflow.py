@@ -524,13 +524,10 @@ class WorkflowTests(unittest.TestCase):
             mock.patch("moodtag.cli.spinner", no_spinner),
             mock.patch("moodtag.cli.EagleClient", return_value=Eagle()),
             mock.patch("moodtag.cli.load_board_scope", return_value=scope),
-            mock.patch("moodtag.cli.prompt_yes_no", return_value=True),
-            mock.patch("moodtag.cli.supports_cursor", return_value=True),
-            mock.patch("moodtag.cli.clear_previous_lines") as clear_region,
+            mock.patch("builtins.input", return_value=""),
             mock.patch("moodtag.cli._command_tag_v2", return_value=0) as command_tag,
         ):
             self.assertEqual(moodtag.cli._command_guided_tag_v2(args), 0)
-        self.assertEqual(clear_region.call_args.args[1], 6)
         command_tag.assert_called_once_with(args)
         self.assertEqual(spinners, ["Loading your Eagle board"])
 

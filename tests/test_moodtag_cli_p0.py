@@ -173,7 +173,7 @@ class MoodtagCliP0Tests(unittest.TestCase):
                 self.assertEqual(moodtag.main(["MSHGWFME8L6SJ"]), 0)
 
         self.assertEqual(stdout.getvalue(), "")
-        self.assertIn("Service URL: https://example.test/v1", stderr.getvalue())
+        self.assertIn("Nothing to process.", stderr.getvalue())
         self.assertNotIn("test-key", stderr.getvalue())
 
 

@@ -25,6 +25,7 @@ def choose(
     choices: Sequence[str | MenuChoice],
     *,
     allow_back: bool = False,
+    default: int | None = None,
 ) -> int | None:
     normalized = [
         choice if isinstance(choice, MenuChoice) else MenuChoice(choice)
@@ -53,6 +54,9 @@ def choose(
             raise MenuCancelled
         if allow_back and answer == "b":
             return None
+        if not answer and default is not None:
+            if 0 <= default < len(normalized):
+                return default
         if answer.isdigit() and 1 <= int(answer) <= len(normalized):
             return int(answer) - 1
         printer.emit("Enter a valid option.", state="warning")

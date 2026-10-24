@@ -30,6 +30,7 @@ from typing import Any
 
 from moodtag_core.annotation import (
     ANNOTATION_LABEL_ORDER,
+    analysis_status,
     build_annotation_block,
     extract_brief,
     has_analysis_annotation,
@@ -73,7 +74,6 @@ from .config import (
     save_user_config,
     update_user_config,
 )
-from .ui.ansi import clear_previous_lines, supports_cursor
 from .ui.menu import MenuCancelled, MenuChoice, choose
 from .ui.printer import Printer
 from .ui.session import Session
@@ -599,25 +599,60 @@ class EagleClient:
             )
         return boards
 
-    def list_items(self, folder_id: str, *, limit: int = 10000) -> list[EagleItem]:
-        # V2 POST supports folder filtering and returns total/offset metadata.
-        data = http_request(
-            "POST",
-            url_join(self.base_url, "/api/v2/item/get"),
-            json_body={"folders": [folder_id], "limit": limit, "offset": 0},
-            timeout=30,
-        )
-        if isinstance(data, dict) and data.get("status") == "success":
-            raw_items = data.get("data", {}).get("data", [])
-            return [parse_item(raw) for raw in raw_items]
+    def list_items(self, folder_id: str, *, limit: int = 1000) -> list[EagleItem]:
+        """Read every page; Eagle may cap a requested limit at 1000."""
+        items: list[EagleItem] = []
+        offset = 0
+        while True:
+            data = http_request(
+                "POST",
+                url_join(self.base_url, "/api/v2/item/get"),
+                json_body={"folders": [folder_id], "limit": limit, "offset": offset},
+                timeout=30,
+            )
+            if not isinstance(data, dict) or data.get("status") != "success":
+                break
+            payload = data.get("data") if isinstance(data.get("data"), dict) else {}
+            raw_items = payload.get("data", [])
+            if not isinstance(raw_items, list):
+                raise MoodtagError("Eagle item list returned invalid page data")
+            page = [parse_item(raw) for raw in raw_items]
+            items.extend(page)
+            total = payload.get("total")
+            page_limit = int(payload.get("limit") or limit)
+            page_offset = int(payload.get("offset") or offset)
+            if total is None:
+                if len(page) < page_limit:
+                    return items
+            elif page_offset + len(page) >= int(total):
+                return items
+            if not page:
+                raise MoodtagError("Eagle item list pagination stopped before total")
+            offset = page_offset + len(page)
 
-        # Fallback to the documented v1 list endpoint.
-        query = urllib.parse.urlencode({"folders": folder_id, "limit": limit})
-        data = http_request(
-            "GET", url_join(self.base_url, f"/api/item/list?{query}"), timeout=30
-        )
-        self._expect_success(data, "item list")
-        return [parse_item(raw) for raw in data.get("data", [])]
+        # Fallback to the documented v1 list endpoint, which may also paginate.
+        offset = 0
+        while True:
+            query = urllib.parse.urlencode(
+                {"folders": folder_id, "limit": limit, "offset": offset}
+            )
+            data = http_request(
+                "GET", url_join(self.base_url, f"/api/item/list?{query}"), timeout=30
+            )
+            self._expect_success(data, "item list")
+            raw_items = data.get("data", [])
+            if not isinstance(raw_items, list):
+                raise MoodtagError("Eagle item list returned invalid page data")
+            page = [parse_item(raw) for raw in raw_items]
+            items.extend(page)
+            total = data.get("total")
+            if total is None:
+                return items
+            if offset + len(page) >= int(total):
+                return items
+            if not page:
+                raise MoodtagError("Eagle item list pagination stopped before total")
+            offset += len(page)
 
     def thumbnail_path(self, item_id: str) -> Path:
         query = urllib.parse.urlencode({"id": item_id})
@@ -641,11 +676,22 @@ class EagleClient:
         self._expect_success(data, "item info")
         return parse_item(data.get("data", {}))
 
-    def update_item(self, item_id: str, *, tags: list[str], annotation: str) -> None:
+    def update_item(
+        self,
+        item_id: str,
+        *,
+        tags: list[str] | None = None,
+        annotation: str | None = None,
+    ) -> None:
+        body: dict[str, Any] = {"id": item_id}
+        if tags is not None:
+            body["tags"] = tags
+        if annotation is not None:
+            body["annotation"] = annotation
         data = http_request(
             "POST",
             url_join(self.base_url, "/api/item/update"),
-            json_body={"id": item_id, "tags": tags, "annotation": annotation},
+            json_body=body,
             timeout=30,
         )
         self._expect_success(data, "item update")
@@ -830,6 +876,56 @@ def print_scope_summary(scope: BoardScope) -> None:
 
 def has_moodboard_notes(annotation: str) -> bool:
     return has_analysis_annotation(annotation)
+
+
+def analysis_item_status(item: EagleItem) -> str:
+    return analysis_status(item.annotation)
+
+
+def merge_item_tags(existing: list[str], generated: list[str]) -> list[str]:
+    """Keep user order and append new AI tags without case-insensitive duplicates."""
+    merged: list[str] = []
+    seen: set[str] = set()
+    for tag in [*existing, *generated]:
+        clean = str(tag).strip()
+        key = clean.casefold()
+        if clean and key not in seen:
+            merged.append(clean)
+            seen.add(key)
+    return merged
+
+
+def compose_item_metadata(
+    item: EagleItem, *, tags: list[str], annotation: str
+) -> tuple[list[str], str]:
+    """Merge generated output into the latest Eagle metadata safely."""
+    return (
+        merge_item_tags(item.tags, tags),
+        replace_analysis_annotation(item.annotation, annotation),
+    )
+
+
+def write_analysis_result(
+    eagle: Any,
+    result: TagItemResult,
+    *,
+    skip_existing: bool = False,
+) -> str:
+    """Refresh one item immediately before writing and return changed/skipped."""
+    item_info = getattr(eagle, "item_info", None)
+    latest = item_info(result.item.id) if callable(item_info) else result.item
+    status = analysis_item_status(latest)
+    if skip_existing and status == "valid":
+        return "skipped"
+    if status == "malformed":
+        raise MoodtagError(
+            f"Cannot safely update {latest.name or latest.id}: malformed Moodtag annotation"
+        )
+    tags, annotation = compose_item_metadata(
+        latest, tags=result.tags, annotation=result.annotation
+    )
+    eagle.update_item(latest.id, tags=tags, annotation=annotation)
+    return "changed"
 
 
 def replace_notes_block(existing: str, block: str) -> str:
@@ -1122,11 +1218,6 @@ def make_vision_client(
     base_url = str(getattr(args, "base_url", "")).strip()
     source = str(getattr(args, "source", "openai-compatible") or "openai-compatible")
     if source == "ollama":
-        concurrency = max(1, int(getattr(args, "concurrency", 1) or 1))
-        if concurrency > 1:
-            raise MoodtagError(
-                "Ollama currently supports one image request at a time; set --concurrency 1."
-            )
         return OllamaVisionClient(
             base_url=base_url or "http://127.0.0.1:11434",
             model=model,
@@ -2004,11 +2095,11 @@ def _command_guided_tag_legacy(args: argparse.Namespace) -> int:
 
         write_started = time.monotonic()
         try:
-            eagle.update_item(
-                result.item.id,
-                tags=result.tags,
-                annotation=result.annotation,
+            write_status = write_analysis_result(
+                eagle, result, skip_existing=not args.force
             )
+            if write_status == "skipped":
+                return 0, 0
         except Exception as exc:  # noqa: BLE001 - per-item isolation
             write_ms = elapsed_ms_since(write_started)
             timings_ms = merge_timings(result.timings_ms, write_ms=write_ms)
@@ -2200,11 +2291,11 @@ def _command_tag_legacy(args: argparse.Namespace) -> int:
         if args.write:
             write_started = time.monotonic()
             try:
-                eagle.update_item(
-                    result.item.id,
-                    tags=result.tags,
-                    annotation=result.annotation,
+                write_status = write_analysis_result(
+                    eagle, result, skip_existing=not args.force
                 )
+                if write_status == "skipped":
+                    return 0, 0
             except Exception as exc:  # noqa: BLE001 - per-item isolation
                 timings_ms = merge_timings(
                     result.timings_ms, write_ms=elapsed_ms_since(write_started)
@@ -2406,47 +2497,71 @@ def _emit_final_result(
 def _command_guided_tag_v2(args: argparse.Namespace) -> int:
     validate_tag_args(args)
     printer = Printer(plain=getattr(args, "plain", False))
-    if not getattr(args, "mock_model", False):
-        try:
-            ensure_model_setup(args)
-        except SetupCancelled:
-            printer.emit("Model setup cancelled. Nothing changed.", state="warning")
-            return 0
     eagle = public_attr("EagleClient")(args.eagle_api)
-    eagle.app_info()
+    try:
+        eagle.app_info()
+    except CoreError as exc:
+        raise MoodtagError(str(exc)) from exc
     scope = _load_guided_board_scope(args, eagle, printer)
     if scope is None:
         printer.emit("Cancelled. Nothing changed.", state="warning")
         return 0
     items = scope.items
     completed = sum(has_moodboard_notes(item.annotation) for item in items)
-    selected = sum(
-        not has_moodboard_notes(item.annotation) or args.force for item in items
+    malformed = sum(analysis_item_status(item) == "malformed" for item in items)
+    unsupported = sum(unsupported_media_reason(item) is not None for item in items)
+    pending = sum(
+        analysis_item_status(item) == "missing"
+        and unsupported_media_reason(item) is None
+        for item in items
     )
     printer.emit(f"Ready to tag \u201c{scope.board.path}\u201d", state="next")
     printer.emit(
-        f"{len(items)} images total · {selected} to tag · {completed} already tagged"
+        f"{len(items)} images total · {completed} already described · {pending} pending"
     )
+    if unsupported or malformed:
+        printer.emit(
+            f"{unsupported} unsupported · {malformed} malformed descriptions",
+            state="warning",
+        )
+    if pending == 0 and malformed == 0:
+        printer.emit("Nothing to process.", state="success")
+        return 0
     printer.emit_parts(
         [
             ("Tagging style: ", "secondary"),
             (tagging_style_name(args.profile), "primary"),
-            (" · Model: ", "secondary"),
-            ("Ready", "success"),
         ]
     )
-    printer.emit("Existing tags and notes will be replaced.", state="warning")
-    if not prompt_yes_no(
-        "Start tagging and update Eagle?", default=False, printer=printer
-    ):
+    try:
+        selected = choose(
+            printer,
+            "Choose processing strategy",
+            [
+                MenuChoice(
+                    "Only process images without an AI description", primary=True
+                ),
+                MenuChoice("Regenerate AI descriptions and tags"),
+                MenuChoice("Exit"),
+            ],
+            default=0,
+        )
+    except MenuCancelled:
         printer.emit("Cancelled. Nothing changed.", state="warning")
         return 0
-    if supports_cursor(printer.stream, plain=printer.plain):
-        # Input leaves a blank line after the five-line confirmation region.
-        clear_previous_lines(printer.stream, 6)
-        printer.stream.flush()
+    if selected is None or selected == 2:
+        printer.emit("Cancelled. Nothing changed.", state="warning")
+        return 0
+
+    if not getattr(args, "mock_model", False):
+        try:
+            ensure_model_setup(args)
+        except SetupCancelled:
+            printer.emit("Model setup cancelled. Nothing changed.", state="warning")
+            return 0
     args.guided_main_flow = False
     args.write = True
+    args.force = selected == 1
     return _command_tag_v2(args)
 
 
@@ -2496,8 +2611,8 @@ def _command_tag_v2(args: argparse.Namespace) -> int:
     )
     session = Session(printer)
     try:
+        vision = public_attr("make_vision_client")(args)
         with session.wait("Connecting to Eagle and model"):
-            vision = public_attr("make_vision_client")(args)
             if isinstance(vision, OllamaVisionClient):
                 vision.preflight()
             eagle = public_attr("EagleClient")(args.eagle_api)
@@ -2524,10 +2639,18 @@ def _command_tag_v2(args: argparse.Namespace) -> int:
     work_items: list[tuple[int, EagleItem]] = []
     skipped = 0
     for index, item in enumerate(items, 1):
-        if has_moodboard_notes(item.annotation) and not args.force:
+        status = analysis_item_status(item)
+        is_valid = has_moodboard_notes(item.annotation)
+        if is_valid and not args.force:
             skipped += 1
             if getattr(args, "verbose", 0) and not getattr(args, "quiet", 0):
                 printer.emit(f"Skip {item.name}: already tagged", state="warning")
+        elif status == "malformed":
+            skipped += 1
+            if not getattr(args, "quiet", 0):
+                printer.emit(
+                    f"Skip {item.name}: malformed Moodtag annotation", state="warning"
+                )
         elif unsupported_media_reason(item):
             skipped += 1
             if getattr(args, "verbose", 0) and not getattr(args, "quiet", 0):
@@ -2634,11 +2757,12 @@ def _command_tag_v2(args: argparse.Namespace) -> int:
             try:
                 for result in successes:
                     try:
-                        eagle.update_item(
-                            result.item.id,
-                            tags=result.tags,
-                            annotation=result.annotation,
+                        write_status = write_analysis_result(
+                            eagle, result, skip_existing=not args.force
                         )
+                        if write_status == "skipped":
+                            progress.update(f"{result.item.name}: skipped")
+                            continue
                     except KeyboardInterrupt:
                         cancelled = True
                         printer.emit(
@@ -2749,17 +2873,34 @@ def command_reset(args: argparse.Namespace) -> int:
     items = scope.items
     printer = Printer()
     changed = 0
+    skipped = 0
     for item in items:
-        if not item.annotation and not item.tags:
+        if analysis_item_status(item) != "valid":
+            if analysis_item_status(item) == "malformed":
+                printer.emit(
+                    f"skip\t{item.id}\t{item.name}\tmalformed Moodtag annotation"
+                )
             continue
         changed += 1
         printer.emit(f"{'write' if args.write else 'dry-run'}\t{item.id}\t{item.name}")
         if args.write:
-            eagle.update_item(item.id, tags=[], annotation="")
+            item_info = getattr(eagle, "item_info", None)
+            latest = item_info(item.id) if callable(item_info) else item
+            if analysis_item_status(latest) != "valid":
+                skipped += 1
+                continue
+            try:
+                annotation = remove_notes_block(latest.annotation)
+            except ValueError:
+                skipped += 1
+                continue
+            eagle.update_item(item.id, annotation=annotation)
     if not args.write:
-        printer.emit("Dry run only. Re-run with --write to clear annotations and tags.")
+        printer.emit("Dry run only. Re-run with --write to remove Moodtag annotations.")
     printer.emit(f"Board: {board.path}")
     printer.emit(f"Reset candidates: {changed}")
+    if skipped:
+        printer.emit(f"Skipped: {skipped}")
     return 0
 
 
@@ -2790,14 +2931,21 @@ def effective_model_config(config: dict[str, str]) -> dict[str, str]:
 
 def _setup_prompt(printer: Printer) -> dict[str, str]:
     try:
+        printer.emit(
+            "Remote API: no local model install; provider charges and remote image transfer may apply."
+        )
+        printer.emit(
+            "Local Ollama: no remote model API charge; requires Ollama, a vision model, and local resources."
+        )
         protocol_index = choose(
             printer,
             "Choose model source",
-            ["Ollama (local)", "Chat Completions", "Responses"],
+            ["Remote API", "Ollama (local)"],
+            default=0,
         )
         if protocol_index is None:
             raise MoodtagError("Setup cancelled.")
-        if protocol_index == 0:
+        if protocol_index == 1:
             printer.emit("Ollama URL (default http://127.0.0.1:11434):")
             base_url = input().strip() or "http://127.0.0.1:11434"
             probe = OllamaVisionClient(base_url=base_url, model="discovery")
@@ -2817,7 +2965,18 @@ def _setup_prompt(printer: Printer) -> dict[str, str]:
                 "ollama_preset": "qwen-instruct",
                 "api_key": "",
             }
-        protocol = ("chat", "responses")[protocol_index - 1]
+        printer.emit(
+            "Remote API uses an endpoint, model, and API key; charges may apply."
+        )
+        remote_protocol = choose(
+            printer,
+            "Choose Remote API protocol",
+            ["Chat Completions", "Responses"],
+            default=0,
+        )
+        if remote_protocol is None:
+            raise MoodtagError("Setup cancelled.")
+        protocol = ("chat", "responses")[remote_protocol]
         models = models_for_protocol(protocol)
         model_index = choose(
             printer,
