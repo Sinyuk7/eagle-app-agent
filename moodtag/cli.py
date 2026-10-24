@@ -41,7 +41,7 @@ from moodtag_core.annotation import (
     replace_analysis_annotation,
 )
 from moodtag_core.catalog import (
-    load_model_catalog,
+    models_for_protocol,
     protocol_for_model,
 )
 from moodtag_core.contract import (
@@ -3346,13 +3346,14 @@ def _command_tag_v2(args: argparse.Namespace) -> int:
                     concurrency=args.concurrency,
                 ):
                     analyzed.append(result)
-                    outcome = f"{result.item.name}: {'×' if result.error else '✓'}"
-                    progress.update(outcome)
+                    status = "×" if result.error else "✓"
+                    progress.update(f"{result.item.name}: {status}")
                     if result.error:
                         failed += 1
                     if getattr(args, "verbose", 0) and not getattr(args, "quiet", 0):
                         printer.emit(
-                            outcome, state="failure" if result.error else "success"
+                            f"{result.item.name}: {status}",
+                            state="failure" if result.error else "success",
                         )
                     if getattr(args, "verbose", 0) >= 2 and not getattr(
                         args, "quiet", 0
@@ -3635,7 +3636,9 @@ def _setup_prompt(
             tr("Get a Recommended API Service ↗", "注册推荐 API 服务 ↗"),
             "https://sub2.de5.net/register?aff=KBK7PER5ECUY",
         )
-        models = load_model_catalog()
+        # The retired Qwen entry remains loadable for existing Chat profiles,
+        # but the interactive chooser only offers the current Responses model.
+        models = models_for_protocol("responses")
         model_index = choose(
             printer,
             tr("Choose Remote API model", "选择远程 API 模型"),
@@ -3648,6 +3651,10 @@ def _setup_prompt(
         )
         if model_index is None:
             raise SetupCancelled("Setup cancelled.")
+        # Keep the setup flow defensive if a non-interactive caller supplies a
+        # stale selection index after the catalog changes.
+        if not 0 <= model_index < len(models):
+            model_index = 0
         model = models[model_index].id
         current_url = existing.get("base_url", "")
         printer.emit(
@@ -4327,7 +4334,10 @@ def command_guided_scope_flow(printer: Printer) -> int:
         if choice is None:
             return command_home()
 
-        args = build_parser().parse_args(["tag"])
+        # The guided flow creates a fresh argparse namespace after the scope is
+        # selected.  Seed it from the persisted config so a configured remote
+        # model is reused instead of triggering setup on every invocation.
+        args = build_parser(load_user_config()).parse_args(["tag"])
         args._interactive_home = True
         args.write = True
         if choice == 0:

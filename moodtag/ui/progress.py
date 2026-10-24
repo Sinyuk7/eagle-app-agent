@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from collections import deque
 
@@ -21,6 +22,8 @@ def _cell_width(text: str) -> int:
 
 def _fit_title(text: str, width: int = _ITEM_TITLE_WIDTH) -> str:
     """Fit a title to terminal cells, preserving room for an ASCII ellipsis."""
+    if re.fullmatch(r"[0-9a-fA-F]{32}", text):
+        text = text[:8] + "..."
     if _cell_width(text) <= width:
         return text + " " * (width - _cell_width(text))
 
@@ -55,7 +58,13 @@ class Progress:
                 from alive_progress import alive_bar
 
                 self._bar = alive_bar(
-                    self.total, title=self.label, file=self.printer.stream
+                    self.total,
+                    title=self.label,
+                    file=self.printer.stream,
+                    # Throughput is an implementation detail (completed
+                    # items per second), and is easy to mistake for API
+                    # latency. Keep the useful ETA without showing `/s`.
+                    stats="(~{eta})",
                 )
                 self._update = self._bar.__enter__()
             except ImportError:
