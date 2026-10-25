@@ -27,12 +27,14 @@ class Session:
             self._active = False
 
     @contextmanager
-    def progress(self, total: int, label: str) -> Iterator[Progress]:
+    def progress(
+        self, total: int, label: str, *, show_rate: bool = True
+    ) -> Iterator[Progress]:
         if self._active:
             raise RuntimeError("terminal renderer already active")
         self._active = True
         try:
-            with Progress(self.printer, total, label) as renderer:
+            with Progress(self.printer, total, label, show_rate=show_rate) as renderer:
                 yield renderer
         finally:
             self._active = False

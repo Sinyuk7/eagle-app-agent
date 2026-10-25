@@ -35,3 +35,5 @@ uv tool install git+https://github.com/Sinyuk7/eagle-app-agent.git
 - [模型配置](docs/model-setup.md)
 - [CLI 进阶用法](docs/cli-reference.md)
 - [贡献指南](CONTRIBUTING.md)
+
+Moodtag 按 GNU GPL v3 许可证发布，许可条款见 [LICENSE](LICENSE)。

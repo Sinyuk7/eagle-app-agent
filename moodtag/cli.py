@@ -3400,7 +3400,9 @@ def _command_tag_v2(args: argparse.Namespace) -> int:
             key=lambda result: result.index,
         )
         with session.progress(
-            len(successes), tr("Updating Eagle", "正在更新 Eagle")
+            len(successes),
+            tr("Updating Eagle", "正在更新 Eagle"),
+            show_rate=False,
         ) as progress:
             try:
                 for result in successes:

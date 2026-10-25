@@ -45,8 +45,16 @@ def _split_outcome(text: str) -> tuple[str, str]:
 
 
 class Progress:
-    def __init__(self, printer: Printer, total: int, label: str) -> None:
+    def __init__(
+        self,
+        printer: Printer,
+        total: int,
+        label: str,
+        *,
+        show_rate: bool = True,
+    ) -> None:
         self.printer, self.total, self.label = printer, total, label
+        self.show_rate = show_rate
         self.count = 0
         self.recent: deque[str] = deque(maxlen=1)
         self._bar = None
@@ -61,12 +69,11 @@ class Progress:
                     self.total,
                     title=self.label,
                     file=self.printer.stream,
-                    # Make the throughput unit explicit: this is completed
-                    # images per second, not per-request API latency.
-                    # alive-progress exposes rate as a preformatted string in
-                    # current releases; numeric format specs crash its render
-                    # thread on Python 3.13.
-                    stats="(~{eta}, {rate} images/s)",
+                    unit=" images",
+                    # alive-progress appends the configured unit and `/s` to
+                    # the rate string. That rate is useful during model
+                    # analysis, but not during fast local Eagle writeback.
+                    stats="({eta}, {rate})" if self.show_rate else "({elapsed})",
                 )
                 self._update = self._bar.__enter__()
             except ImportError:
