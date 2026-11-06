@@ -802,6 +802,38 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("\x1b[2m", text)
         self.assertTrue(bar.exited)
 
+    def test_tty_progress_without_rate_uses_supported_empty_stats(self):
+        captured: dict[str, object] = {}
+
+        class BarHandle:
+            text = ""
+
+            def __call__(self, count=1):
+                return None
+
+        class BarContext:
+            def __enter__(self):
+                return BarHandle()
+
+            def __exit__(self, *_args):
+                return None
+
+        def alive_bar(*_args, **kwargs):
+            captured.update(kwargs)
+            return BarContext()
+
+        module = types.SimpleNamespace(alive_bar=alive_bar)
+        with (
+            mock.patch.dict(os.environ, {"TERM": "xterm-256color"}, clear=True),
+            mock.patch.dict(sys.modules, {"alive_progress": module}),
+        ):
+            with Progress(
+                Printer(stream=TtyStringIO()), 1, "Updating Eagle", show_rate=False
+            ):
+                pass
+
+        self.assertEqual(captured["stats"], "")
+
     def test_progress_titles_use_a_fixed_display_width_and_ellipsis(self):
         short = _fit_title("image")
         long = _fit_title("牛X啊！Lisa登上《ELLE》杂志金九刊封面及写真美图大赏！")

@@ -70,10 +70,10 @@ class Progress:
                     title=self.label,
                     file=self.printer.stream,
                     unit=" images",
-                    # alive-progress appends the configured unit and `/s` to
-                    # the rate string. That rate is useful during model
-                    # analysis, but not during fast local Eagle writeback.
-                    stats="({eta}, {rate})" if self.show_rate else "({elapsed})",
+                    # alive-progress only supports the `eta` and `rate` fields
+                    # in custom stats. During fast local writeback, omit stats
+                    # rather than showing a rate that is not useful here.
+                    stats="({eta}, {rate})" if self.show_rate else "",
                 )
                 self._update = self._bar.__enter__()
             except ImportError:
